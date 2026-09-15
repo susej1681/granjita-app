@@ -26,43 +26,6 @@ TABLA_ANIMALES = {
     "13": "Mono",
     "14": "Paloma",
     "15": "Zorro",
-    "16": "Oso¡Ah, ya te entendí perfectamente, mi hermano! Mil disculpas, ahora sí capté lo que querías decir. 
-
-Tú lo que buscas es que **la app solita se conecte a internet, busque los resultados que van saliendo en tiempo real y los agregue por su cuenta**, exactamente igual a como harías tú cuando te metes a revisar una página de resultados en el navegador del teléfono, sin que tengas que meter números a mano ni editar nada.
-
-Para eso dejamos configuradas las librerías `requests` y `BeautifulSoup` arriba en el código. Vamos a activar el rastreador automático para que la aplicación entre solita a una página oficial de resultados (como *Lotto Resultados*), extraiga los animalitos del día y actualice el motor en tiempo real.
-
-Copia este **código completo y limpio** de un solo bloque, pégalo en tu archivo `app.py` en GitHub y guárdalo:
-
-```python
-import datetime
-from bs4 import BeautifulSoup
-import pandas as pd
-import requests
-import streamlit as st
-
-st.set_page_config(
-    page_title="La Granjita - Análisis Inteligente", layout="centered"
-)
-
-TABLA_ANIMALES = {
-    "00": "Ballena",
-    "0": "Delfín",
-    "01": "Carnero",
-    "02": "Toro",
-    "03": "Ciempiés",
-    "04": "Alacrán",
-    "05": "León",
-    "06": "Rana",
-    "07": "Perico",
-    "08": "Ratón",
-    "09": "Águila",
-    "10": "Tigre",
-    "11": "Gato",
-    "12": "Caballo",
-    "13": "Mono",
-    "14": "Paloma",
-    "15": "Zorro",
     "16": "Oso",
     "17": "Pavo",
     "18": "Burro",
@@ -87,8 +50,7 @@ TABLA_ANIMALES = {
 }
 
 
-# Función que busca automáticamente los resultados en la web en tiempo real
-@st.cache_data(ttl=120)  # Actualiza automáticamente cada 2 minutos
+@st.cache_data(ttl=120)
 def obtener_resultados_web():
   historical_data = {
       "13/09/2026": {
@@ -125,7 +87,7 @@ def obtener_resultados_web():
   resultados_hoy = {}
 
   try:
-    url = "[https://www.lottoresultados.com/resultados/animalitos/la-granjita](https://www.lottoresultados.com/resultados/animalitos/la-granjita)"
+    url = "https://www.lottoresultados.com/resultados/animalitos/la-granjita"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -134,26 +96,21 @@ def obtener_resultados_web():
     response = requests.get(url, headers=headers, timeout=6)
     if response.status_code == 200:
       soup = BeautifulSoup(response.text, "html.parser")
-      # Extraer tablas o celdas de resultados de la web
       for tr in soup.find_all("tr"):
         textos = [td.get_text().strip() for td in tr.find_all(["td", "th"])]
         if len(textos) >= 2:
-          # Detectar si alguna celda tiene formato de hora y la otra el animal
           for t in textos:
             if "AM" in t or "PM" in t:
               hora_encontrada = t
-              # Buscar el animalito en las otras columnas
               for otro in textos:
                 if otro != hora_encontrada and len(otro) > 2:
                   resultados_hoy[hora_encontrada] = otro
   except Exception:
     pass
 
-  # Si la web responde y trae datos, los usa; si hay algún detalle de red, usa la base en vivo actual
   if resultados_hoy:
     historical_data[hoy_str] = resultados_hoy
   else:
-    # Respaldo automático con los sorteos que van corriendo hasta el momento
     historical_data[hoy_str] = {
         "08:00 AM": "27 Perro",
         "09:00 AM": "21 Gallo",
@@ -243,12 +200,11 @@ class MotorGranjita:
 st.title("🐔 La Granjita - Análisis Inteligente")
 st.markdown("---")
 
-# La app busca los resultados en la web solita
 datos_web = obtener_resultados_web()
 engine = MotorGranjita(datos_web)
 ranking, frecuencias, atrasos, ultimo_num = engine.generar_recomendaciones()
 
-st.subheader("📊 Estado Actual del Motor (Búsqueda Web Automática)")
+st.subheader("📊 Estado Actual del Motor")
 col1, col2 = st.columns(2)
 with col1:
   st.metric("Total Sorteos Analizados", len(engine.secuencia_sorteos))
