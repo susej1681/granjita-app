@@ -224,8 +224,8 @@ with col2:
     )
 
 st.markdown("---")
-st.subheader("🔥 Top 5 Animalitos en Zona Dulce")
-for i in range(min(5, len(ranking))):
+st.subheader("🔥 Top 3 Animalitos en Zona Dulce")
+for i in range(min(3, len(ranking))):
   num, score = ranking[i]
   nombre = TABLA_ANIMALES[num]
   st.write(
