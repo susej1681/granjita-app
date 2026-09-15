@@ -1,11 +1,97 @@
+import datetime
+from bs4 import BeautifulSoup
 import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="La Granjita PRO - IA", page_icon="🦁")
+st.set_page_config(
+    page_title="La Granjita - Análisis Inteligente", layout="centered"
+)
 
-# --- TABLA COMPLETA DE ANIMALITOS ---
-ANIMALES = {
+# ==========================================
+# BASE DE DATOS HISTÓRICA - LA GRANJITA
+# ==========================================
+HISTORICAL_DATA = {
+    "10/09/2026": {
+        "08:00 AM": "23 Cebra",
+        "09:00 AM": "25 Gallina",
+        "10:00 AM": "30 Caimán",
+        "11:00 AM": "19 Chivo",
+        "12:00 PM": "35 Jirafa",
+        "01:00 PM": "20 Cochino",
+        "02:00 PM": "27 Perro",
+        "03:00 PM": "33 Pescado",
+        "04:00 PM": "28 Zamuro",
+        "05:00 PM": "0 Delfín",
+        "06:00 PM": "23 Cebra",
+        "07:00 PM": "26 Vaca",
+    },
+    "11/09/2026": {
+        "08:00 AM": "12 Caballo",
+        "09:00 AM": "31 Lapa",
+        "10:00 AM": "30 Caimán",
+        "11:00 AM": "29 Elefante",
+        "12:00 PM": "18 Burro",
+        "01:00 PM": "24 Iguana",
+        "02:00 PM": "02 Toro",
+        "03:00 PM": "28 Zamuro",
+        "04:00 PM": "09 Águila",
+        "05:00 PM": "05 León",
+        "06:00 PM": "20 Cochino",
+        "07:00 PM": "0 Delfín",
+    },
+    "12/09/2026": {
+        "08:00 AM": "25 Gallina",
+        "09:00 AM": "08 Ratón",
+        "10:00 AM": "13 Mono",
+        "11:00 AM": "31 Lapa",
+        "12:00 PM": "16 Oso",
+        "01:00 PM": "02 Toro",
+        "02:00 PM": "23 Cebra",
+        "03:00 PM": "13 Mono",
+        "04:00 PM": "10 Tigre",
+        "05:00 PM": "33 Pescado",
+        "06:00 PM": "14 Paloma",
+        "07:00 PM": "27 Perro",
+    },
+    "13/09/2026": {
+        "08:00 AM": "05 León",
+        "09:00 AM": "30 Caimán",
+        "10:00 AM": "06 Rana",
+        "11:00 AM": "16 Oso",
+        "12:00 PM": "01 Carnero",
+        "01:00 PM": "28 Zamuro",
+        "02:00 PM": "27 Perro",
+        "03:00 PM": "27 Perro",
+        "04:00 PM": "23 Cebra",
+        "05:00 PM": "22 Camello",
+        "06:00 PM": "07 Perico",
+        "07:00 PM": "18 Burro",
+    },
+    "14/09/2026": {
+        "08:00 AM": "03 Ciempiés",
+        "09:00 AM": "20 Cochino",
+        "10:00 AM": "12 Caballo",
+        "11:00 AM": "08 Ratón",
+        "12:00 PM": "0 Delfín",
+        "01:00 PM": "26 Vaca",
+        "02:00 PM": "15 Zorro",
+        "03:00 PM": "29 Elefante",
+        "04:00 PM": "17 Pavo",
+        "05:00 PM": "07 Perico",
+        "06:00 PM": "01 Carnero",
+        "07:00 PM": "19 Chivo",
+    },
+    "15/09/2026": {
+        "08:00 AM": "27 Perro",
+        "09:00 AM": "21 Gallo",
+        "10:00 AM": "04 Alacrán",
+        "11:00 AM": "18 Burro",
+        "12:00 PM": "20 Cochino",
+    },
+}
+
+TABLA_ANIMALES = {
     "00": "Ballena",
     "0": "Delfín",
     "01": "Carnero",
@@ -46,143 +132,113 @@ ANIMALES = {
     "36": "Culebra",
 }
 
-# --- MAPA JALA-JALA (RELACIONES DE ARRASTRE) ---
-JALA_JALA = {
-    "00": ["0", "33", "30"],
-    "0": ["00", "33"],
-    "01": ["02", "19", "22"],
-    "02": ["01", "26"],
-    "03": ["04", "36"],
-    "04": ["03", "36"],
-    "05": ["10", "11"],
-    "06": ["24", "30"],
-    "07": ["14", "17", "21"],
-    "08": ["11", "32"],
-    "09": ["28", "07"],
-    "10": ["05", "11"],
-    "11": ["08", "05", "10"],
-    "12": ["23", "27", "18"],
-    "13": ["32", "08"],
-    "14": ["17", "25", "07"],
-    "15": ["27", "11"],
-    "16": ["29", "05"],
-    "17": ["14", "21", "25"],
-    "18": ["12", "19"],
-    "19": ["01", "18"],
-    "20": ["27", "18"],
-    "21": ["25", "17", "07"],
-    "22": ["01", "02"],
-    "23": ["12", "18"],
-    "24": ["30", "36", "06"],
-    "25": ["21", "14"],
-    "26": ["02", "01"],
-    "27": ["20", "12", "15"],
-    "28": ["09", "04"],
-    "29": ["16", "35"],
-    "30": ["24", "36"],
-    "31": ["32", "13"],
-    "32": ["08", "13", "31"],
-    "33": ["00", "0"],
-    "34": ["35", "12"],
-    "35": ["34", "29"],
-    "36": ["03", "04", "30"],
-}
+
+class MotorGranjita:
+
+  def __init__(self, database):
+    self.db = database
+    self.secuencia_sorteos = self._aplanar_datos()
+
+  def _aplanar_datos(self):
+    lista = []
+    for fecha in sorted(
+        self.db.keys(),
+        key=lambda x: datetime.datetime.strptime(x, "%d/%m/%Y"),
+    ):
+      for hora in sorted(self.db[fecha].keys()):
+        lista.append((fecha, hora, self.db[fecha][hora]))
+    return lista
+
+  def calcular_estadisticas(self):
+    frecuencias = {num: 0 for num in TABLA_ANIMALES.keys()}
+    ultimo_idx = {num: -999 for num in TABLA_ANIMALES.keys()}
+    total_sorteos = len(self.secuencia_sorteos)
+
+    for idx, (fecha, hora, animal_str) in enumerate(self.secuencia_sorteos):
+      num = animal_str.split(" ")[0]
+      if num in frecuencias:
+        frecuencias[num] += 1
+        ultimo_idx[num] = idx
+
+    atrasos = {}
+    for num in TABLA_ANIMALES.keys():
+      if ultimo_idx[num] == -999:
+        atrasos[num] = total_sorteos
+      else:
+        atrasos[num] = (total_sorteos - 1) - ultimo_idx[num]
+
+    return frecuencias, atrasos
+
+  def calcular_jala_jala(self):
+    transiciones = {num: {} for num in TABLA_ANIMALES.keys()}
+    for i in range(len(self.secuencia_sorteos) - 1):
+      _, _, actual_str = self.secuencia_sorteos[i]
+      _, _, siguiente_str = self.secuencia_sorteos[i + 1]
+
+      curr_num = actual_str.split(" ")[0]
+      next_num = siguiente_str.split(" ")[0]
+
+      if next_num not in transiciones[curr_num]:
+        transiciones[curr_num][next_num] = 0
+      transiciones[curr_num][next_num] += 1
+
+    if self.secuencia_sorteos:
+      _, _, ultimo_salido_str = self.secuencia_sorteos[-1]
+      ultimo_num = ultimo_salido_str.split(" ")[0]
+      jalados = transiciones.get(ultimo_num, {})
+      ranking_jalados = sorted(jalados.items(), key=lambda x: x[1], reverse=True)
+      return ultimo_num, ranking_jalados
+    return None, []
+
+  def generar_recomendaciones(self):
+    frecuencias, atrasos = self.calcular_estadisticas()
+    ultimo_num, ranking_jalados = self.calcular_jala_jala()
+
+    puntajes = {}
+    for num in TABLA_ANIMALES.keys():
+      score = (atrasos[num] * 1.5) + (frecuencias[num] * 2.0)
+      puntajes[num] = score
+
+    for num, freq_jala in ranking_jalados:
+      if num in puntajes:
+        puntajes[num] += freq_jala * 5.0
+
+    ranking = sorted(puntajes.items(), key=lambda x: x[1], reverse=True)
+    return ranking, frecuencias, atrasos, ultimo_num
 
 
-def cargar_datos_granjita():
-  # Función de raspado/escaneo de resultados
-  url = "https://www.loteriahoy.com/resultados/la-granjita"
-  try:
-    # Simulación de extracción de datos recientes
-    # En producción procesa el scraping directo
-    resp = requests.get(url, timeout=5)
-    # Por defecto devolvemos estructura analítica
-    return [
-        "27",
-        "21",
-        "04",
-        "18",
-        "20",
-        "13",
-        "12",
-        "27",
-        "20",
-        "05",
-        "23",
-        "07",
-    ]
-  except:
-    return ["27", "21", "04", "18", "20", "13"]
+st.title("🐔 La Granjita - Análisis Inteligente")
+st.markdown("---")
 
+engine = MotorGranjita(HISTORICAL_DATA)
+ranking, frecuencias, atrasos, ultimo_num = engine.generar_recomendaciones()
 
-st.title("🦁 La Granjita PRO")
-st.caption("Sistema Predictivo Inteligente Multivariable")
+st.subheader("📊 Estado Actual del Motor")
+col1, col2 = st.columns(2)
+with col1:
+  st.metric("Total Sorteos Analizados", len(engine.secuencia_sorteos))
+with col2:
+  if ultimo_num:
+    st.metric(
+        "Último Animal", f"[{ultimo_num}] {TABLA_ANIMALES.get(ultimo_num, '')}"
+    )
 
-if st.button("🔄 Escanear Resultados en Vivo"):
-  st.rerun()
-
-historial = cargar_datos_granjita()
-ultimo_salido = historial[0] if historial else None
-
-# --- CÁLCULO DEL SCORE INTELIGENTE ---
-scores = {num: 0.0 for num in ANIMALES.keys()}
-mora = {num: 0 for num in ANIMALES.keys()}
-
-# 1. Conteo de Mora (Atraso)
-for num in ANIMALES.keys():
-  if num in historial:
-    mora[num] = historial.index(num)
-  else:
-    mora[num] = len(historial) + 20
-
-# 2. Puntuación por Frecuencia Ponderada
-for idx, num in enumerate(historial):
-  peso = 3.0 if idx < 10 else 1.0  # Salidas de hoy valen triple
-  if num in scores:
-    scores[num] += peso
-
-# 3. Puntuación por Jala-Jala (Último animal salido)
-if ultimo_salido and ultimo_salido in JALA_JALA:
-  jalados = JALA_JALA[ultimo_salido]
-  for j in jalados:
-    if j in scores:
-      scores[j] += 5.0  # +5 Puntos de Arrastre
-
-# 4. Puntuación por Zona Dulce / Penalización por Atraso Ciego
-for num, m in mora.items():
-  if 8 <= m <= 22:
-    scores[num] += 3.0  # Punto Caramelo
-  elif m > 35:
-    scores[num] -= 5.0  # Penalizado por congelado
-
-# --- ORDENAR RESULTADOS ---
-df_res = pd.DataFrame(
-    [
-        {
-            "Num": k,
-            "Animal": f"[{k}] {ANIMALES[k]}",
-            "Score": scores[k],
-            "Mora": mora[k],
-        }
-        for k in ANIMALES.keys()
-    ]
-)
-
-df_top = df_res.sort_values(by="Score", ascending=False).reset_index(drop=True)
-
-st.subheader("🔥 Top 3 Recomendados para Sorteo Individual")
-for i in range(3):
-  item = df_top.iloc[i]
-  st.success(
-      f"**#{i+1}: {item['Animal']}** | Índice de Fuerza: {item['Score']:.1f} pts"
+st.markdown("---")
+st.subheader("🔥 Top 5 Animalitos en Zona Dulce")
+for i in range(min(5, len(ranking))):
+  num, score = ranking[i]
+  nombre = TABLA_ANIMALES[num]
+  st.write(
+      f"**{i+1}. [{num}] {nombre}** — Score: `{score:.1f}` | Salidas:"
+      f" `{frecuencias[num]}` | Atraso: `{atrasos[num]}` sorteos"
   )
 
 st.markdown("---")
-st.subheader("🎰 TRIPLETA INTELIGENTE DEL DÍA")
-t1, t2, t3 = df_top.iloc[0]["Animal"], df_top.iloc[1]["Animal"], df_top.iloc[2]["Animal"]
-st.info(f"🎯 **{t1} — {t2} — {t3}**")
+st.subheader("🎯 Sugerencia de Tripletas y Quiniela")
+t1 = f"[{ranking[0][0]}] {TABLA_ANIMALES[ranking[0][0]]}"
+t2 = f"[{ranking[1][0]}] {TABLA_ANIMALES[ranking[1][0]]}"
+t3 = f"[{ranking[2][0]}] {TABLA_ANIMALES[ranking[2][0]]}"
+t4 = f"[{ranking[3][0]}] {TABLA_ANIMALES[ranking[3][0]]}"
 
-if ultimo_salido:
-  st.write(
-      f"💡 *El último animal salido fue **[{ultimo_salido}] {ANIMALES.get(ultimo_salido)}**, por lo que la Tripleta incluye sus jala-jala con mayor ventaja.*"
-  )
+st.success(f"• **Quiniela recomendada:** {t1} - {t2} - {t3}")
+st.info(f"• **Tripleta fuerte de la tarde:** {t1} con {t2} y {t4}")
