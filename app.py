@@ -28,31 +28,42 @@ ANIMALES_MAP = {
 }
 
 # ==========================================
-# ESTADO INICIAL: RESULTADOS OFICIALES DE HOY (8 AM A 5 PM)
+# ESTADO INICIAL: 4 DÍAS DE HISTORIAL OFICIAL EXTRAÍDO DE TUS CAPTURAS
 # ==========================================
 if 'df_sorteos' not in st.session_state:
-    hoy_str = datetime.now().strftime("%d/%m/%Y")
-    datos_iniciales = [
-        {"Fecha": hoy_str, "Hora": "08:00 AM", "Numero": "27", "Animal": "Perro"},
-        {"Fecha": hoy_str, "Hora": "09:00 AM", "Numero": "21", "Animal": "Gallo"},
-        {"Fecha": hoy_str, "Hora": "10:00 AM", "Numero": "04", "Animal": "Alacrán"},
-        {"Fecha": hoy_str, "Hora": "11:00 AM", "Numero": "18", "Animal": "Burro"},
-        {"Fecha": hoy_str, "Hora": "12:00 PM", "Numero": "20", "Animal": "Cochino"},
-        {"Fecha": hoy_str, "Hora": "01:00 PM", "Numero": "13", "Animal": "Mono"},
-        {"Fecha": hoy_str, "Hora": "02:00 PM", "Numero": "21", "Animal": "Gallo"},
-        {"Fecha": hoy_str, "Hora": "03:00 PM", "Numero": "01", "Animal": "Carnero"},
-        {"Fecha": hoy_str, "Hora": "04:00 PM", "Numero": "25", "Animal": "Gallina"},
-        {"Fecha": hoy_str, "Hora": "05:00 PM", "Numero": "29", "Animal": "Elefante"},
-        {"Fecha": hoy_str, "Hora": "06:00 PM", "Numero": "", "Animal": ""},
-        {"Fecha": hoy_str, "Hora": "07:00 PM", "Numero": "", "Animal": ""}
-    ]
+    horas_sorteos = ["08:00 AM", "09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", 
+                     "01:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM", 
+                     "06:00 PM", "07:00 PM"]
+    
+    datos_iniciales = []
+    
+    # 1. Día 12/09/2026 (Extraído de captura)
+    res_12 = ["25", "08", "13", "31", "16", "02", "23", "13", "10", "33", "14", "27"]
+    for h, num in zip(horas_sorteos, res_12):
+        datos_iniciales.append({"Fecha": "12/09/2026", "Hora": h, "Numero": num, "Animal": ANIMALES_MAP.get(num, "")})
+        
+    # 2. Día 13/09/2026 (Extraído de captura)
+    res_13 = ["05", "30", "06", "16", "01", "28", "27", "27", "23", "22", "07", "18"]
+    for h, num in zip(horas_sorteos, res_13):
+        datos_iniciales.append({"Fecha": "13/09/2026", "Hora": h, "Numero": num, "Animal": ANIMALES_MAP.get(num, "")})
+        
+    # 3. Día 14/09/2026 (Extraído de captura)
+    res_14 = ["03", "20", "12", "08", "0", "26", "15", "29", "17", "07", "01", "19"]
+    for h, num in zip(horas_sorteos, res_14):
+        datos_iniciales.append({"Fecha": "14/09/2026", "Hora": h, "Numero": num, "Animal": ANIMALES_MAP.get(num, "")})
+        
+    # 4. Día 15/09/2026 (Hoy - Hasta las 5 PM con Elefante 29 y vacías las que faltan)
+    res_15 = ["27", "21", "04", "18", "20", "13", "21", "01", "25", "29", "", ""]
+    for h, num in zip(horas_sorteos, res_15):
+        animal = ANIMALES_MAP.get(num, "") if num in ANIMALES_MAP else ""
+        datos_iniciales.append({"Fecha": "15/09/2026", "Hora": h, "Numero": num, "Animal": animal})
+
     st.session_state['df_sorteos'] = pd.DataFrame(datos_iniciales)
 
 # ==========================================
 # MOTOR DE ANÁLISIS ESTADÍSTICO
 # ==========================================
 def ejecutar_motor_analisis(df_data):
-    # Filtrar solo los que tienen un número válido registrado
     df_valido = df_data[df_data['Numero'].astype(str).isin(ANIMALES_MAP.keys())].copy()
     total_sorteos = len(df_valido)
     
@@ -104,47 +115,34 @@ def ejecutar_motor_analisis(df_data):
 # INTERFAZ DE USUARIO (STREAMLIT)
 # ==========================================
 def main():
-    st.title("🐾 La Granjita Pro - Panel de Control Directo")
-    st.markdown("Resultados de hoy cargados con precisión. Modifica cualquier celda de la tabla si lo necesitas.")
+    st.title("🐾 La Granjita Pro - Historial Completo")
+    st.markdown("Base de datos sincronizada con 4 días oficiales. Modifica o añade resultados directamente en la tabla.")
 
     # Panel lateral
     st.sidebar.header("Opciones")
-    if st.sidebar.button("🔄 Restablecer Datos de Hoy"):
-        hoy_str = datetime.now().strftime("%d/%m/%Y")
-        datos_iniciales = [
-            {"Fecha": hoy_str, "Hora": "08:00 AM", "Numero": "27", "Animal": "Perro"},
-            {"Fecha": hoy_str, "Hora": "09:00 AM", "Numero": "21", "Animal": "Gallo"},
-            {"Fecha": hoy_str, "Hora": "10:00 AM", "Numero": "04", "Animal": "Alacrán"},
-            {"Fecha": hoy_str, "Hora": "11:00 AM", "Numero": "18", "Animal": "Burro"},
-            {"Fecha": hoy_str, "Hora": "12:00 PM", "Numero": "20", "Animal": "Cochino"},
-            {"Fecha": hoy_str, "Hora": "01:00 PM", "Numero": "13", "Animal": "Mono"},
-            {"Fecha": hoy_str, "Hora": "02:00 PM", "Numero": "21", "Animal": "Gallo"},
-            {"Fecha": hoy_str, "Hora": "03:00 PM", "Numero": "01", "Animal": "Carnero"},
-            {"Fecha": hoy_str, "Hora": "04:00 PM", "Numero": "25", "Animal": "Gallina"},
-            {"Fecha": hoy_str, "Hora": "05:00 PM", "Numero": "29", "Animal": "Elefante"},
-            {"Fecha": hoy_str, "Hora": "06:00 PM", "Numero": "", "Animal": ""},
-            {"Fecha": hoy_str, "Hora": "07:00 PM", "Numero": "", "Animal": ""}
-        ]
-        st.session_state['df_sorteos'] = pd.DataFrame(datos_iniciales)
+    if st.sidebar.button("🔄 Restablecer Historial Oficial"):
+        del st.session_state['df_sorteos']
         st.rerun()
 
-    st.sidebar.success("✅ Sistema limpio y sincronizado.")
+    st.sidebar.success("✅ Historial de 4 días cargado correctamente.")
 
     # SECCIÓN DE EDICIÓN DIRECTA
-    st.subheader("📝 Tabla de Sorteos de Hoy")
-    st.markdown("💡 *Haz clic en la columna **Número** para actualizar las próximas horas (6:00 PM, 7:00 PM).*")
+    st.subheader("📝 Tabla de Sorteos Oficiales")
+    st.markdown("💡 *Haz clic en la columna **Número** para completar los resultados de las 6:00 PM y 7:00 PM de hoy.*")
 
     df_editado = st.data_editor(
         st.session_state['df_sorteos'],
         num_rows="dynamic",
         use_container_width=True,
-        key="editor_sorteos_tabla"
+        key="editor_sorteos_tabla_4dias"
     )
 
     for idx, row in df_editado.iterrows():
         num_limpio = str(row['Numero']).strip()
         if num_limpio in ANIMALES_MAP:
             df_editado.at[idx, 'Animal'] = ANIMALES_MAP[num_limpio]
+        else:
+            df_editado.at[idx, 'Animal'] = ""
 
     st.session_state['df_sorteos'] = df_editado
 
@@ -156,7 +154,7 @@ def main():
     with col_u1:
         st.metric(label="Último Animal Activo", value=f"{ultimo_salido} - {ANIMALES_MAP.get(ultimo_salido, '')}")
     with col_u2:
-        st.info(f"**💡 Análisis Jala-Jala Activo:** El último animal registrado es el **{ultimo_salido} ({ANIMALES_MAP.get(ultimo_salido, '')})**. Las probabilidades se calculan de forma impecable.")
+        st.info(f"**💡 Análisis Jala-Jala Activo:** Último animal registrado: **{ultimo_salido} ({ANIMALES_MAP.get(ultimo_salido, '')})**. Con 4 días de historial, el motor tiene toda la data pesada lista.")
 
     st.markdown("---")
 
@@ -175,22 +173,17 @@ def main():
 
     st.markdown("---")
 
-    # SECCIÓN 2: TRIPLETAS Y JUGADAS
+    # SECCIÓN 2: TRIPLETA Y JUGADAS
     col_A, col_B = st.columns(2)
 
     with col_A:
-        st.subheader("🔥 Tripletas Fuertes Recomendadas")
+        st.subheader("🔥 Tripleta Fuerte Recomendada")
         top_nums = df_analisis.index.tolist()
-        if len(top_nums) >= 9:
-            tripletas = [
-                f"{top_nums[0]} ({ANIMALES_MAP[top_nums[0]]}) - {top_nums[3]} ({ANIMALES_MAP[top_nums[3]]}) - {top_nums[6]} ({ANIMALES_MAP[top_nums[6]]})",
-                f"{top_nums[1]} ({ANIMALES_MAP[top_nums[1]]}) - {top_nums[4]} ({ANIMALES_MAP[top_nums[4]]}) - {top_nums[7]} ({ANIMALES_MAP[top_nums[7]]})",
-                f"{top_nums[2]} ({ANIMALES_MAP[top_nums[2]]}) - {top_nums[5]} ({ANIMALES_MAP[top_nums[5]]}) - {top_nums[8]} ({ANIMALES_MAP[top_nums[8]]})"
-            ]
-            for t in tripletas:
-                st.success(f"✨ **Tripleta:** {t}")
+        if len(top_nums) >= 3:
+            tripleta_principal = f"{top_nums[0]} ({ANIMALES_MAP[top_nums[0]]}) - {top_nums[1]} ({ANIMALES_MAP[top_nums[1]]}) - {top_nums[2]} ({ANIMALES_MAP[top_nums[2]]})"
+            st.success(f"✨ **Tripleta Ideal:** {tripleta_principal}")
         else:
-            st.warning("Faltan más datos para armar las tripletas.")
+            st.warning("Faltan más datos para armar la tripleta.")
 
     with col_B:
         st.subheader("🎲 Jugadas Individuales Directas")
