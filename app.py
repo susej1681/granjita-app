@@ -12,48 +12,6 @@ st.set_page_config(
 # BASE DE DATOS HISTÓRICA - LA GRANJITA
 # ==========================================
 HISTORICAL_DATA = {
-    "10/09/2026": {
-        "08:00 AM": "23 Cebra",
-        "09:00 AM": "25 Gallina",
-        "10:00 AM": "30 Caimán",
-        "11:00 AM": "19 Chivo",
-        "12:00 PM": "35 Jirafa",
-        "01:00 PM": "20 Cochino",
-        "02:00 PM": "27 Perro",
-        "03:00 PM": "33 Pescado",
-        "04:00 PM": "28 Zamuro",
-        "05:00 PM": "0 Delfín",
-        "06:00 PM": "23 Cebra",
-        "07:00 PM": "26 Vaca",
-    },
-    "11/09/2026": {
-        "08:00 AM": "12 Caballo",
-        "09:00 AM": "31 Lapa",
-        "10:00 AM": "30 Caimán",
-        "11:00 AM": "29 Elefante",
-        "12:00 PM": "18 Burro",
-        "01:00 PM": "24 Iguana",
-        "02:00 PM": "02 Toro",
-        "03:00 PM": "28 Zamuro",
-        "04:00 PM": "09 Águila",
-        "05:00 PM": "05 León",
-        "06:00 PM": "20 Cochino",
-        "07:00 PM": "0 Delfín",
-    },
-    "12/09/2026": {
-        "08:00 AM": "25 Gallina",
-        "09:00 AM": "08 Ratón",
-        "10:00 AM": "13 Mono",
-        "11:00 AM": "31 Lapa",
-        "12:00 PM": "16 Oso",
-        "01:00 PM": "02 Toro",
-        "02:00 PM": "23 Cebra",
-        "03:00 PM": "13 Mono",
-        "04:00 PM": "10 Tigre",
-        "05:00 PM": "33 Pescado",
-        "06:00 PM": "14 Paloma",
-        "07:00 PM": "27 Perro",
-    },
     "13/09/2026": {
         "08:00 AM": "05 León",
         "09:00 AM": "30 Caimán",
@@ -88,6 +46,9 @@ HISTORICAL_DATA = {
         "10:00 AM": "04 Alacrán",
         "11:00 AM": "18 Burro",
         "12:00 PM": "20 Cochino",
+        "01:00 PM": "33 Pescado",
+        "02:00 PM": "11 Gato",
+        "03:00 PM": "00 Ballena",
     },
 }
 
@@ -163,7 +124,8 @@ class MotorGranjita:
     atrasos = {}
     for num in TABLA_ANIMALES.keys():
       if ultimo_idx[num] == -999:
-        atrasos[num] = total_sorteos
+        # Corrección: si no salió en la muestra reciente, se le asigna un atraso base realista, no artificialmente gigante
+        atrasos[num] = int(total_sorteos * 0.5)
       else:
         atrasos[num] = (total_sorteos - 1) - ultimo_idx[num]
 
@@ -196,12 +158,13 @@ class MotorGranjita:
 
     puntajes = {}
     for num in TABLA_ANIMALES.keys():
-      score = (atrasos[num] * 1.5) + (frecuencias[num] * 2.0)
+      # Fórmula equilibrada: Frecuencia real + Atraso moderado + Impulso de Jala-Jala
+      score = (frecuencias[num] * 3.0) + (atrasos[num] * 0.5)
       puntajes[num] = score
 
     for num, freq_jala in ranking_jalados:
       if num in puntajes:
-        puntajes[num] += freq_jala * 5.0
+        puntajes[num] += freq_jala * 8.0  # El jala-jala real manda fuerte
 
     ranking = sorted(puntajes.items(), key=lambda x: x[1], reverse=True)
     return ranking, frecuencias, atrasos, ultimo_num
@@ -235,10 +198,25 @@ for i in range(min(3, len(ranking))):
 
 st.markdown("---")
 st.subheader("🎯 Sugerencia de Tripletas y Quiniela")
-t1 = f"[{ranking[0][0]}] {TABLA_ANIMALES[ranking[0][0]]}"
-t2 = f"[{ranking[1][0]}] {TABLA_ANIMALES[ranking[1][0]]}"
-t3 = f"[{ranking[2][0]}] {TABLA_ANIMALES[ranking[2][0]]}"
-t4 = f"[{ranking[3][0]}] {TABLA_ANIMALES[ranking[3][0]]}"
+t1 = (
+    f"[{ranking[0][0]}]"
+    f" {TABLA_ANIMALES.get(ranking[0][0], 'Desconocido')}"
+)
+t2 = (
+    f"[{ranking[1][0]}]"
+    f" {TABLA_ANIMALES.get(ranking[1][0], 'Desconocido')}"
+)
+t3 = (
+    f"[{ranking[2][0]}]"
+    f" {TABLA_ANIMALES.get(ranking[2][0], 'Desconocido')}"
+)
+# Buscamos un cuarto por si acaso para la tripleta combinada
+t4 = (
+    f"[{ranking[3][0]}]"
+    f" {TABLA_ANIMALES.get(ranking[3][0], 'Desconocido')}"
+    if len(ranking) > 3
+    else t3
+)
 
 st.success(f"• **Quiniela recomendada:** {t1} - {t2} - {t3}")
 st.info(f"• **Tripleta fuerte de la tarde:** {t1} con {t2} y {t4}")
