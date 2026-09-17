@@ -16,7 +16,6 @@ SORTEOS_POR_DIA = 12
 DIAS_VENTANA = 5
 VENTANA_SORTEOS = SORTEOS_POR_DIA * DIAS_VENTANA
 
-# Clave 100 = Ballena (00). Clave 0 = Delfín (0). El resto normal.
 ANIMALITOS_DICT = {
     0: "Delfín", 1: "Carnero", 2: "Toro", 3: "Ciempiés", 4: "Alacrán",
     5: "León", 6: "Rana", 7: "Perico", 8: "Ratón", 9: "Águila",
@@ -30,7 +29,6 @@ ANIMALITOS_DICT = {
 
 
 def fmt_num(n):
-    """Muestra 00 para Ballena (100), 0 para Delfín, y 01-36 para el resto."""
     if n == 100:
         return "00"
     if n == 0:
@@ -85,7 +83,6 @@ def cargar_historial_google_sheets():
                 match = re.search(r'\((\d+)\)', val)
                 if match:
                     num_str = match.group(1)
-                    # Si es "00" → Ballena (clave 100). Si es "0" → Delfín (clave 0).
                     if num_str == "00":
                         num = 100
                     else:
@@ -100,7 +97,7 @@ def cargar_historial_google_sheets():
         df = pd.DataFrame(registros)
         if not df.empty:
             df["fecha_dt"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y", errors="coerce")
-            df = df.sort_values(["fecha_dt"]).reset_index(drop=True)
+            df = df.sort_values(["fecha_dt"], kind="stable").reset_index(drop=True)
         return df
 
     except Exception as e:
@@ -159,7 +156,7 @@ def detectar_alineaciones(df, min_repeticiones=2):
 
 def motor_casi_adivino(df):
     if df.empty or len(df) < 20:
-        return {}, {}, None, [], []
+        return {}, {}, None, [], [], None
 
     df_ventana = df.tail(VENTANA_SORTEOS).copy()
     freq_ventana = Counter(df_ventana["numero"].tolist())
@@ -198,10 +195,17 @@ def motor_casi_adivino(df):
     max_jal = max(jales_entrantes.values()) if jales_entrantes else 1
 
     fechas_unicas = df["fecha"].unique().tolist()
-    ayer_nums = set()
-    if len(fechas_unicas) >= 2:
-        fecha_ayer = fechas_unicas[-2]
-        ayer_nums = set(df[df["fecha"] == fecha_ayer]["numero"].tolist())
+    ultima_fecha_str = fechas_unicas[-1]
+    ultima_fecha_dt = pd.to_datetime(ultima_fecha_str, format="%d/%m/%Y", errors="coerce")
+    hoy_real_dt = pd.Timestamp.now().normalize()
+
+    fecha_dia_anterior = None
+    if pd.notna(ultima_fecha_dt):
+        if ultima_fecha_dt.normalize() == hoy_real_dt:
+            if len(fechas_unicas) >= 2:
+                fecha_dia_anterior = fechas_unicas[-2]
+        else:
+            fecha_dia_anterior = ultima_fecha_str
 
     scores = {}
     detalles = {}
@@ -262,7 +266,6 @@ def motor_casi_adivino(df):
             "atraso_hoy": atr_hoy,
             "jales_in": jal,
             "caliente": bonus_caliente > 0,
-            "repetidor": num in ayer_nums,
             "penal": penal_frio < 0,
             "reciente": penal_reciente < 0
         }
@@ -270,7 +273,7 @@ def motor_casi_adivino(df):
     top_ordenado = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     alineaciones = detectar_alineaciones(df, min_repeticiones=2)
 
-    return scores, detalles, top_ordenado, jales_aprendidos, alineaciones
+    return scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior
 
 
 def armar_resultados(scores, detalles, top_ordenado):
@@ -316,7 +319,7 @@ def main():
         st.error("No se pudieron cargar datos. Verifica que la hoja sea pública.")
         return
 
-    scores, detalles, top_ordenado, jales_aprendidos, alineaciones = motor_casi_adivino(df)
+    scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior = motor_casi_adivino(df)
     if not top_ordenado:
         st.warning("Datos insuficientes.")
         return
@@ -328,24 +331,30 @@ def main():
         st.markdown("### 🔗 Alineación Caliente Detectada")
         for al in alineaciones[:3]:
             a, b = al["par"]
-            st.markdown(f"**{fmt_num(a)} {ANIMALITOS_DICT.get(a, '?')} + {fmt_num(b)} {ANIMALITOS_DICT.get(b, '?')}**")
+            st.markdown(f"**{fmt_num(a)} {ANIMALITOS_DICT[a]} + {fmt_num(b)} {ANIMALITOS_DICT[b]}**")
             st.caption(f"Se han alineado {al['veces']} veces · Promedio cada {al['promedio']} sorteos · Atraso: {al['atraso']}")
         st.markdown("---")
 
     st.markdown("### 🎯 Último resultado")
-    st.markdown(f"## {fmt_num(ultimo['numero'])} - {ultimo['nombre']}")
+    st.markdown(f"## {fmt_num(int(ultimo['numero']))} - {ultimo['nombre']}")
     st.caption(f"Fecha: {ultimo['fecha']}")
 
     st.markdown("---")
 
-    st.markdown("### 🔁 Repetidores de ayer")
-    repetidores_hoy = [n for n in detalles if detalles[n]["repetidor"]]
-    if repetidores_hoy:
-        for num in repetidores_hoy[:10]:
-            d = detalles[num]
-            st.write(f"- {fmt_num(num)} - {ANIMALITOS_DICT[num]} (atraso: {d['atraso']})")
+    if fecha_dia_anterior:
+        st.markdown(f"### 🔁 Animales del {fecha_dia_anterior} (en orden de salida)")
+        df_dia = df[df["fecha"] == fecha_dia_anterior].reset_index(drop=True)
+        if not df_dia.empty:
+            for i, row in df_dia.iterrows():
+                num = int(row["numero"])
+                d = detalles.get(num, {})
+                atr_actual = d.get("atraso", "?")
+                st.write(f"{i+1}. **{fmt_num(num)} - {row['nombre']}** (atraso: {atr_actual})")
+        else:
+            st.caption("Sin datos de ese día.")
     else:
-        st.caption("Ninguno todavía.")
+        st.markdown("### 🔁 Animales del día anterior")
+        st.caption("No se detectó día anterior.")
 
     st.markdown("---")
 
@@ -356,11 +365,10 @@ def main():
         st.markdown(f"**Score: {individual['score']}%**")
         marcas = []
         if d["caliente"]: marcas.append("🔥 Caliente")
-        if d["repetidor"]: marcas.append("🔁 Repetidor de ayer")
         if d["penal"]: marcas.append("⚠️ Enjaulado")
         if marcas:
             st.markdown(" · ".join(marcas))
-        st.caption(f"Freq(65): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
+        st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
 
     st.markdown("---")
 
@@ -369,10 +377,9 @@ def main():
         d = item["detalle"]
         marcas = []
         if d["caliente"]: marcas.append("🔥")
-        if d["repetidor"]: marcas.append("🔁")
         if d["penal"]: marcas.append("⚠️")
         st.markdown(f"**#{i} - {item['numero']} {item['nombre']}** — {item['score']}% {' '.join(marcas)}")
-        st.caption(f"Freq(65): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
+        st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
 
     st.markdown("---")
 
@@ -385,7 +392,6 @@ def main():
             d = t["detalle"]
             marcas = []
             if d["caliente"]: marcas.append("🔥")
-            if d["repetidor"]: marcas.append("🔁 Repetidor de ayer")
             st.write(f"- **{t['numero']} {t['nombre']}** ({t['score']}%) {' '.join(marcas)}")
 
     st.markdown("---")
