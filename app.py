@@ -156,7 +156,7 @@ def detectar_alineaciones(df, min_repeticiones=2):
 
 def motor_casi_adivino(df):
     if df.empty or len(df) < 20:
-        return {}, {}, None, [], [], None
+        return {}, {}, None, [], [], None, {}
 
     df_ventana = df.tail(VENTANA_SORTEOS).copy()
     freq_ventana = Counter(df_ventana["numero"].tolist())
@@ -273,10 +273,11 @@ def motor_casi_adivino(df):
     top_ordenado = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     alineaciones = detectar_alineaciones(df, min_repeticiones=2)
 
-    return scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior
+    return scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior, atrasos
 
 
-def armar_resultados(scores, detalles, top_ordenado):
+def armar_resultados(scores, detalles, top_ordenado, atrasos):
+    # TRIPLETA OFICIAL: top 3 por score
     top3 = []
     for num, sc in top_ordenado[:3]:
         top3.append({
@@ -288,12 +289,53 @@ def armar_resultados(scores, detalles, top_ordenado):
         })
 
     individual = top3[0] if top3 else None
-    candidatos_tripleta = [num for num, sc in top_ordenado if sc > 0][:15]
-    tripleta_nums = candidatos_tripleta[:3]
 
-    tripleta = []
-    for num in tripleta_nums:
-        tripleta.append({
+    # TRIPLETA ALTERNATIVA
+    nums_oficiales = set([t["int_num"] for t in top3])
+    candidatos = [(n, s) for n, s in top_ordenado if n not in nums_oficiales and s > 0][:20]
+
+    caliente = None
+    for n, s in candidatos:
+        if detalles[n]["freq_20"] >= 2:
+            caliente = n
+            break
+    if caliente is None and candidatos:
+        caliente = candidatos[0][0]
+
+    maduro = None
+    for n, s in candidatos:
+        if n == caliente: continue
+        atr = atrasos.get(n, 0)
+        if 10 <= atr <= 55:
+            maduro = n
+            break
+    if maduro is None:
+        for n, s in candidatos:
+            if n != caliente:
+                maduro = n
+                break
+
+    jale = None
+    for n, s in candidatos:
+        if n in (caliente, maduro): continue
+        if detalles[n]["jales_in"] >= 2:
+            jale = n
+            break
+    if jale is None:
+        for n, s in candidatos:
+            if n not in (caliente, maduro):
+                jale = n
+                break
+
+    tripleta_alt_nums = [n for n in [caliente, maduro, jale] if n is not None]
+    for n, s in candidatos:
+        if len(tripleta_alt_nums) >= 3: break
+        if n not in tripleta_alt_nums:
+            tripleta_alt_nums.append(n)
+
+    tripleta_alt = []
+    for num in tripleta_alt_nums[:3]:
+        tripleta_alt.append({
             "numero": fmt_num(num),
             "int_num": num,
             "nombre": ANIMALITOS_DICT[num],
@@ -301,7 +343,7 @@ def armar_resultados(scores, detalles, top_ordenado):
             "detalle": detalles[num]
         })
 
-    return individual, top3, tripleta
+    return individual, top3, tripleta_alt
 
 
 def main():
@@ -319,12 +361,12 @@ def main():
         st.error("No se pudieron cargar datos. Verifica que la hoja sea pública.")
         return
 
-    scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior = motor_casi_adivino(df)
+    scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior, atrasos = motor_casi_adivino(df)
     if not top_ordenado:
         st.warning("Datos insuficientes.")
         return
 
-    individual, top3, tripleta = armar_resultados(scores, detalles, top_ordenado)
+    individual, top3, tripleta_alt = armar_resultados(scores, detalles, top_ordenado, atrasos)
     ultimo = df.iloc[-1]
 
     if alineaciones:
@@ -383,15 +425,24 @@ def main():
 
     st.markdown("---")
 
-    st.markdown("### ✨ Tripleta (cubre 11 sorteos)")
-    if len(tripleta) >= 3:
-        linea = " - ".join([f"{t['numero']} {t['nombre']}" for t in tripleta])
+    st.markdown("### 🎯 Tripleta OFICIAL (cubre 11 sorteos)")
+    if len(top3) >= 3:
+        linea = " - ".join([f"{t['numero']} {t['nombre']}" for t in top3])
         st.success(linea)
-        st.caption("Juega estos 3. Si los 3 salen en los próximos 11 sorteos, ganaste.")
-        for t in tripleta:
+        st.caption("Los 3 mejores por score general.")
+
+    st.markdown("---")
+
+    st.markdown("### ⚡ Tripleta ALTERNATIVA (cubre 11 sorteos)")
+    if len(tripleta_alt) >= 3:
+        linea_alt = " - ".join([f"{t['numero']} {t['nombre']}" for t in tripleta_alt])
+        st.info(linea_alt)
+        st.caption("Mezcla: 1 caliente + 1 maduro + 1 con jales fuertes. Distintos a la Oficial.")
+        for t in tripleta_alt:
             d = t["detalle"]
             marcas = []
-            if d["caliente"]: marcas.append("🔥")
+            if d["caliente"]: marcas.append("🔥 Caliente")
+            if d["jales_in"] >= 2: marcas.append(f"🔗 {d['jales_in']} jales")
             st.write(f"- **{t['numero']} {t['nombre']}** ({t['score']}%) {' '.join(marcas)}")
 
     st.markdown("---")
