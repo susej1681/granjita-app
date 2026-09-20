@@ -28,6 +28,13 @@ ANIMALITOS_DICT = {
     35: "Jirafa", 36: "Culebra", 100: "Ballena"
 }
 
+SERIES = {
+    "Serie 0 (00-09)": list(range(0, 10)),
+    "Serie 10 (10-19)": list(range(10, 20)),
+    "Serie 20 (20-29)": list(range(20, 30)),
+    "Serie 30 (30-36)": list(range(30, 37)) + [100]  # incluye 00 Ballena
+}
+
 
 def fmt_num(n):
     if n == 100: return "00"
@@ -130,22 +137,71 @@ def calcular_ritmo_historico(df):
     return ritmos
 
 
+def analizar_series(df, detalles):
+    """Analiza los últimos 60 sorteos por serie."""
+    if df.empty or len(df) < 10:
+        return None
+
+    df_ventana = df.tail(VENTANA_SORTEOS)
+    nums = df_ventana["numero"].tolist()
+    total_v = len(nums)
+
+    # Conteo por serie en los últimos 60
+    conteo_serie = {nombre: 0 for nombre in SERIES.keys()}
+    for n in nums:
+        for nombre, lista in SERIES.items():
+            if n in lista:
+                conteo_serie[nombre] += 1
+                break
+
+    # Atraso por serie (cuántos sorteos desde la última vez)
+    atraso_serie = {}
+    for nombre, lista in SERIES.items():
+        posiciones = [i for i, n in enumerate(nums) if n in lista]
+        atraso_serie[nombre] = total_v - 1 - posiciones[-1] if posiciones else total_v
+
+    # Serie más probable: combina poco atraso con frecuencia razonable
+    candidatos_serie = []
+    for nombre in SERIES.keys():
+        freq = conteo_serie[nombre]
+        atr = atraso_serie[nombre]
+        # Serie que está "caliente" (más apariciones) o "fría con atraso medio"
+        score_serie = freq * 0.6 + atr * 0.4
+        candidatos_serie.append({"nombre": nombre, "freq": freq, "atraso": atr, "score": round(score_serie, 1)})
+
+    candidatos_serie.sort(key=lambda x: x["score"], reverse=True)
+    serie_top = candidatos_serie[0]
+
+    # Top 3 animalitos de la serie recomendada (que no estén enjaulados)
+    lista_serie = SERIES[serie_top["nombre"]]
+    candidatos_animales = []
+    for num in lista_serie:
+        if num in detalles and not detalles[num]["enjaulado"]:
+            candidatos_animales.append({
+                "num": num,
+                "atraso": detalles[num]["atraso"],
+                "freq_20": detalles[num]["freq_20"]
+            })
+    candidatos_animales.sort(key=lambda x: (x["freq_20"], -x["atraso"]), reverse=True)
+
+    return {
+        "conteo": conteo_serie,
+        "atraso": atraso_serie,
+        "serie_top": serie_top,
+        "ranking": candidatos_serie,
+        "animales": candidatos_animales[:3]
+    }
+
+
 def calcular_zona_horaria(df, detalles):
-    """Analiza los últimos 12 sorteos y da los 3 mejores para la próxima hora.
-    EXCLUYE los que ya salieron hoy."""
     total = len(df)
     nums = df["numero"].tolist()
     if total < 12:
         return []
-
     ultimos_12 = nums[-12:]
-
-    # Animales que YA salieron HOY
     fecha_hoy = df["fecha"].iloc[-1]
     df_hoy = df[df["fecha"] == fecha_hoy]
     salieron_hoy = set(df_hoy["numero"].tolist())
-
-    # Jales: qué suele venir después de los últimos 3
     jales_in = Counter()
     ultimos_3 = nums[-3:]
     for ultimo in ultimos_3:
@@ -153,41 +209,21 @@ def calcular_zona_horaria(df, detalles):
             if nums[i] == ultimo:
                 for j in range(i + 1, min(i + 3, total)):
                     jales_in[nums[j]] += 1
-
     candidatos = []
     for num in ANIMALITOS_DICT.keys():
-        if detalles[num]["atraso"] >= DESCARTE_ATRASO:
-            continue
-        if num in salieron_hoy:
-            continue
-
+        if detalles[num]["atraso"] >= DESCARTE_ATRASO: continue
+        if num in salieron_hoy: continue
         atr = detalles[num]["atraso"]
         f12 = ultimos_12.count(num)
         jal = jales_in.get(num, 0)
-
         score = 0.0
-        if 3 <= atr <= 20:
-            score += 0.45
-        elif 20 < atr <= 40:
-            score += 0.30
-        elif 40 < atr < 60:
-            score += 0.15
-
+        if 3 <= atr <= 20: score += 0.45
+        elif 20 < atr <= 40: score += 0.30
+        elif 40 < atr < 60: score += 0.15
         score += min(jal * 0.06, 0.40)
-
-        if f12 >= 2:
-            score += 0.15
-        elif f12 == 1:
-            score += 0.05
-
-        candidatos.append({
-            "num": num,
-            "score": round(score * 100, 2),
-            "atraso": atr,
-            "freq_12": f12,
-            "jales": jal
-        })
-
+        if f12 >= 2: score += 0.15
+        elif f12 == 1: score += 0.05
+        candidatos.append({"num": num, "score": round(score * 100, 2), "atraso": atr, "freq_12": f12, "jales": jal})
     candidatos.sort(key=lambda x: x["score"], reverse=True)
     return candidatos[:3]
 
@@ -196,8 +232,7 @@ def calcular_fijo_del_dia(df, scores, detalles, ritmos):
     total = len(df)
     candidatos = []
     for num in ANIMALITOS_DICT.keys():
-        if num not in ritmos or ritmos[num]["promedio"] >= 500:
-            continue
+        if num not in ritmos or ritmos[num]["promedio"] >= 500: continue
         posiciones = ritmos[num]["apariciones"]
         if not posiciones: continue
         atraso_actual = total - 1 - posiciones[-1]
@@ -302,23 +337,20 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos):
     candidatos = [(n, s) for n, s in top_validos if n not in nums_oficiales and s > 0][:20]
     caliente = None
     for n, s in candidatos:
-        if detalles[n]["freq_20"] >= 2:
-            caliente = n; break
+        if detalles[n]["freq_20"] >= 2: caliente = n; break
     if caliente is None and candidatos: caliente = candidatos[0][0]
     maduro = None
     for n, s in candidatos:
         if n == caliente: continue
         atr = atrasos.get(n, 0)
-        if 10 <= atr <= 55:
-            maduro = n; break
+        if 10 <= atr <= 55: maduro = n; break
     if maduro is None:
         for n, s in candidatos:
             if n != caliente: maduro = n; break
     jale = None
     for n, s in candidatos:
         if n in (caliente, maduro): continue
-        if detalles[n]["jales_in"] >= 2:
-            jale = n; break
+        if detalles[n]["jales_in"] >= 2: jale = n; break
     if jale is None:
         for n, s in candidatos:
             if n not in (caliente, maduro): jale = n; break
@@ -334,7 +366,7 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos):
 
 def main():
     st.title("🐾 Granjita Pro")
-    st.caption("Zona Horaria 12 · Fijo · Tripletas · Filtro 60+")
+    st.caption("Zona Horaria · Series · Fijo · Tripletas · Filtro 60+")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -365,6 +397,26 @@ def main():
             st.caption(f"Atraso: {z['atraso']} · Freq(12): {z['freq_12']} · Jales: {z['jales']}")
     else:
         st.warning("Sin candidatos válidos (todos ya salieron hoy o están enjaulados).")
+    st.markdown("---")
+
+    # ANÁLISIS POR SERIE
+    st.markdown("### 📊 ANÁLISIS POR SERIE (últimos 60 sorteos)")
+    series_info = analizar_series(df, detalles)
+    if series_info:
+        st.markdown("**Conteo por serie:**")
+        for nombre, freq in series_info["conteo"].items():
+            atr = series_info["atraso"][nombre]
+            st.write(f"- {nombre}: **{freq}** apariciones · Atraso: {atr}")
+
+        st.markdown("**Ranking de series (más probable primero):**")
+        for i, s in enumerate(series_info["ranking"], 1):
+            st.write(f"{i}. **{s['nombre']}** (Freq: {s['freq']} · Atraso: {s['atraso']})")
+
+        st.markdown(f"### 🎯 SERIE RECOMENDADA: {series_info['serie_top']['nombre']}")
+        if series_info["animales"]:
+            st.markdown("**Top 3 de esa serie:**")
+            for a in series_info["animales"]:
+                st.write(f"- **{fmt_num(a['num'])} {ANIMALITOS_DICT[a['num']]}** (Atraso: {a['atraso']} · Freq(20): {a['freq_20']})")
     st.markdown("---")
 
     # FIJO DEL DÍA
