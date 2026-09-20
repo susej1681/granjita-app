@@ -131,15 +131,21 @@ def calcular_ritmo_historico(df):
 
 
 def calcular_zona_horaria(df, detalles):
-    """Analiza los últimos 5 sorteos y da los 3 mejores para la próxima hora."""
+    """Analiza los últimos 12 sorteos y da los 3 mejores para la próxima hora.
+    EXCLUYE los que ya salieron hoy."""
     total = len(df)
     nums = df["numero"].tolist()
-    ultimos_5 = nums[-5:]
-    ultimos_2 = nums[-2:]
+    if total < 12:
+        return []
 
-    freq_5 = Counter(ultimos_5)
+    ultimos_12 = nums[-12:]
 
-    # Jales: para cada uno de los últimos 3, ver qué suele venir después
+    # Animales que YA salieron HOY
+    fecha_hoy = df["fecha"].iloc[-1]
+    df_hoy = df[df["fecha"] == fecha_hoy]
+    salieron_hoy = set(df_hoy["numero"].tolist())
+
+    # Jales: qué suele venir después de los últimos 3
     jales_in = Counter()
     ultimos_3 = nums[-3:]
     for ultimo in ultimos_3:
@@ -150,20 +156,16 @@ def calcular_zona_horaria(df, detalles):
 
     candidatos = []
     for num in ANIMALITOS_DICT.keys():
-        # Filtro enjaulados
         if detalles[num]["atraso"] >= DESCARTE_ATRASO:
             continue
-        # Filtro: no los que acaban de salir
-        if num in ultimos_2:
+        if num in salieron_hoy:
             continue
 
         atr = detalles[num]["atraso"]
-        f5 = freq_5.get(num, 0)
+        f12 = ultimos_12.count(num)
         jal = jales_in.get(num, 0)
 
-        # Score base
         score = 0.0
-        # Atraso maduro (3-20 = muy bueno, 20-40 = bueno)
         if 3 <= atr <= 20:
             score += 0.45
         elif 20 < atr <= 40:
@@ -171,20 +173,18 @@ def calcular_zona_horaria(df, detalles):
         elif 40 < atr < 60:
             score += 0.15
 
-        # Jales fuertes
         score += min(jal * 0.06, 0.40)
 
-        # Estuvo caliente en los últimos 5
-        if f5 >= 2:
+        if f12 >= 2:
             score += 0.15
-        elif f5 == 1:
+        elif f12 == 1:
             score += 0.05
 
         candidatos.append({
             "num": num,
             "score": round(score * 100, 2),
             "atraso": atr,
-            "freq_5": f5,
+            "freq_12": f12,
             "jales": jal
         })
 
@@ -334,7 +334,7 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos):
 
 def main():
     st.title("🐾 Granjita Pro")
-    st.caption("Zona Horaria · Fijo · Tripletas · Filtro 60+")
+    st.caption("Zona Horaria 12 · Fijo · Tripletas · Filtro 60+")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -357,14 +357,14 @@ def main():
 
     # ZONA HORARIA
     st.markdown("### ⏰ ZONA HORARIA (próxima hora)")
-    st.caption("Analiza los últimos 5 sorteos")
+    st.caption("Analiza los últimos 12 sorteos · Excluye los que ya salieron hoy")
     zona = calcular_zona_horaria(df, detalles)
     if zona:
         for i, z in enumerate(zona, 1):
             st.markdown(f"**#{i} - {fmt_num(z['num'])} {ANIMALITOS_DICT[z['num']]}** — {z['score']}%")
-            st.caption(f"Atraso: {z['atraso']} · Freq(5): {z['freq_5']} · Jales: {z['jales']}")
+            st.caption(f"Atraso: {z['atraso']} · Freq(12): {z['freq_12']} · Jales: {z['jales']}")
     else:
-        st.warning("Sin candidatos válidos en la zona horaria.")
+        st.warning("Sin candidatos válidos (todos ya salieron hoy o están enjaulados).")
     st.markdown("---")
 
     # FIJO DEL DÍA
