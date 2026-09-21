@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import re
 from collections import Counter
+from itertools import combinations
 
 st.set_page_config(
     page_title="Granjita Pro",
@@ -40,6 +41,13 @@ def fmt_num(n):
     if n == 100: return "00"
     if n == 0: return "0"
     return f"{n:02d}"
+
+
+def serie_de(num):
+    for nombre, lista in SERIES.items():
+        if num in lista:
+            return nombre
+    return "?"
 
 
 @st.cache_data(ttl=120)
@@ -85,6 +93,169 @@ def cargar_historial_google_sheets():
         return pd.DataFrame(columns=["fecha", "numero", "nombre"])
 
 
+# ═══════════════════════════════════════════════════
+# CADENAS: ¿Qué animal suele venir después de X?
+# ═══════════════════════════════════════════════════
+def aprender_cadenas(df, max_salto=3):
+    """Para cada animal, cuenta qué animales suelen venir en los próximos N sorteos."""
+    cadenas = {n: Counter() for n in ANIMALITOS_DICT.keys()}
+    nums = df["numero"].tolist()
+    for i in range(len(nums) - 1):
+        origen = nums[i]
+        for j in range(i + 1, min(i + 1 + max_salto, len(nums))):
+            cadenas[origen][nums[j]] += 1
+    return cadenas
+
+
+# ═══════════════════════════════════════════════════
+# TRÍOS HISTÓRICOS
+# ═══════════════════════════════════════════════════
+def buscar_trios_historicos(df, dias_analisis=60, min_repeticiones=2, ventana=11):
+    if df.empty or len(df) < ventana:
+        return []
+    fechas_unicas = sorted(df["fecha_dt"].unique())
+    if len(fechas_unicas) > dias_analisis:
+        fecha_min = fechas_unicas[-dias_analisis]
+        df = df[df["fecha_dt"] >= fecha_min].reset_index(drop=True)
+    nums = df["numero"].tolist()
+    total = len(nums)
+    if total < ventana:
+        return []
+    conteo_trios = Counter()
+    for i in range(total - ventana + 1):
+        ventana_nums = nums[i:i + ventana]
+        unicos = list(set(ventana_nums))
+        if len(unicos) < 3:
+            continue
+        for trio in combinations(sorted(unicos), 3):
+            conteo_trios[trio] += 1
+    trios_filtrados = [(t, c) for t, c in conteo_trios.items() if c >= min_repeticiones]
+    trios_filtrados.sort(key=lambda x: x[1], reverse=True)
+    return trios_filtrados[:50]
+
+
+# ═══════════════════════════════════════════════════
+# TRIPLETA PENSANTE
+# ═══════════════════════════════════════════════════
+def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist, salieron_hoy, excluir=None):
+    """Arma una tripleta combinando:
+    - Atraso/freq/jales para el #1
+    - Cadenas para el #2
+    - Tríos históricos para el #3
+    Retorna (tripleta, explicaciones)"""
+    if excluir is None:
+        excluir = set()
+
+    # PASO 1: Candidato #1 (el más maduro)
+    candidatos_1 = []
+    for num in ANIMALITOS_DICT.keys():
+        if num in salieron_hoy or num in excluir: continue
+        if detalles[num]["enjaulado"]: continue
+        if num not in ritmos or ritmos[num]["promedio"] >= 500: continue
+        pos = ritmos[num]["apariciones"]
+        if not pos: continue
+        atraso = len(df) - 1 - pos[-1]
+        ritmo = ritmos[num]["promedio"]
+        if ritmo <= 0: continue
+        ratio = atraso / ritmo
+        if ratio >= 1.5: prob = 0.85
+        elif ratio >= 1.0: prob = 0.70
+        elif ratio >= 0.7: prob = 0.55
+        elif ratio >= 0.5: prob = 0.40
+        else: prob = 0.20
+        if ratio > 4: prob *= 0.5
+        if detalles[num]["atraso_hoy"] <= 1: prob *= 0.3
+        score_final = prob * 100 + scores.get(num, 0) * 0.3
+        candidatos_1.append({"num": num, "score": score_final, "atraso": atraso, "ritmo": ritmo, "ratio": round(ratio, 2), "prob": prob})
+
+    candidatos_1.sort(key=lambda x: x["score"], reverse=True)
+    if not candidatos_1:
+        return None, []
+    cand1 = candidatos_1[0]
+    num1 = cand1["num"]
+
+    explicaciones = [f"🎯 **{fmt_num(num1)} {ANIMALITOS_DICT[num1]}**: atraso {cand1['atraso']} vs ritmo {cand1['ritmo']} (ratio {cand1['ratio']})"]
+
+    # PASO 2: Candidato #2 (el que suele venir después del #1)
+    cadena_1 = cadenas.get(num1, Counter())
+    candidatos_2 = []
+    for num2, veces in cadena_1.most_common(20):
+        if num2 == num1 or num2 in salieron_hoy or num2 in excluir: continue
+        if detalles[num2]["enjaulado"]: continue
+        # Score: veces en cadena + freq + atraso razonable
+        score_cad = veces * 10
+        if 3 <= detalles[num2]["atraso"] <= 40:
+            score_cad += 15
+        score_cad += detalles[num2]["freq_20"] * 5
+        candidatos_2.append({"num": num2, "score": score_cad, "veces": veces, "atraso": detalles[num2]["atraso"]})
+
+    # Respaldo: si no hay cadenas claras, usar los siguientes del ranking
+    if len(candidatos_2) < 1:
+        for c in candidatos_1[1:]:
+            if c["num"] not in salieron_hoy and c["num"] not in excluir:
+                candidatos_2.append({"num": c["num"], "score": c["score"], "veces": 0, "atraso": c["atraso"]})
+                break
+
+    if not candidatos_2:
+        return None, []
+    candidatos_2.sort(key=lambda x: x["score"], reverse=True)
+    num2 = candidatos_2[0]["num"]
+    veces_2 = candidatos_2[0]["veces"]
+    if veces_2 > 0:
+        explicaciones.append(f"🔗 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: después de {ANIMALITOS_DICT[num1]} ha salido {veces_2} veces (atraso {candidatos_2[0]['atraso']})")
+    else:
+        explicaciones.append(f"📊 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: segundo más maduro (atraso {candidatos_2[0]['atraso']})")
+
+    # PASO 3: Candidato #3 (el que mejor combina con #1 y #2)
+    candidatos_3 = []
+    for num3 in ANIMALITOS_DICT.keys():
+        if num3 in (num1, num2) or num3 in salieron_hoy or num3 in excluir: continue
+        if detalles[num3]["enjaulado"]: continue
+
+        score_3 = 0
+        explicacion_3 = []
+
+        # ¿Forma parte de un trío histórico con num1 y num2?
+        for trio, veces in trios_hist[:30]:
+            if num3 in trio and num1 in trio and num2 in trio:
+                score_3 += veces * 25
+                explicacion_3.append(f"trío histórico ({veces} veces)")
+
+        # ¿Cuántas veces aparece num3 en cadenas de num1 y num2?
+        c1 = cadenas.get(num1, Counter()).get(num3, 0)
+        c2 = cadenas.get(num2, Counter()).get(num3, 0)
+        if c1 > 0 or c2 > 0:
+            score_3 += (c1 + c2) * 5
+            explicacion_3.append(f"cadenas ({c1 + c2})")
+
+        # Atraso razonable
+        if 3 <= detalles[num3]["atraso"] <= 40:
+            score_3 += 15
+            explicacion_3.append(f"atraso {detalles[num3]['atraso']}")
+
+        # Jales
+        score_3 += detalles[num3]["jales_in"] * 4
+
+        # Serie complementaria
+        if serie_de(num3) != serie_de(num1) and serie_de(num3) != serie_de(num2):
+            score_3 += 8
+            explicacion_3.append("otra serie")
+
+        if score_3 > 0:
+            candidatos_3.append({"num": num3, "score": score_3, "razon": ", ".join(explicacion_3) if explicacion_3 else "complementario"})
+
+    candidatos_3.sort(key=lambda x: x["score"], reverse=True)
+    if not candidatos_3:
+        return None, []
+    num3 = candidatos_3[0]["num"]
+    explicaciones.append(f"🧩 **{fmt_num(num3)} {ANIMALITOS_DICT[num3]}**: {candidatos_3[0]['razon']}")
+
+    return [num1, num2, num3], explicaciones
+
+
+# ═══════════════════════════════════════════════════
+# RESTO DEL SISTEMA
+# ═══════════════════════════════════════════════════
 def aprender_jales(df, max_atraso=3):
     jales = {n: Counter() for n in ANIMALITOS_DICT.keys()}
     nums = df["numero"].tolist()
@@ -138,7 +309,6 @@ def calcular_ritmo_historico(df):
 
 
 def calcular_ultimo_dia(df):
-    """Devuelve la fecha del último día cargado y los números que salieron ese día."""
     if df.empty:
         return None, set()
     fecha_hoy = df["fecha"].iloc[-1]
@@ -171,27 +341,18 @@ def analizar_series(df, detalles, salieron_hoy):
     candidatos_serie.sort(key=lambda x: x["score"], reverse=True)
     serie_top = candidatos_serie[0]
     lista_serie = SERIES[serie_top["nombre"]]
-
-    # Filtro: SOLO los que NO salieron hoy
     candidatos_animales = []
     for num in lista_serie:
         if num in detalles and not detalles[num]["enjaulado"] and num not in salieron_hoy:
             candidatos_animales.append({"num": num, "atraso": detalles[num]["atraso"], "freq_20": detalles[num]["freq_20"]})
     candidatos_animales.sort(key=lambda x: (x["freq_20"], -x["atraso"]), reverse=True)
-
-    # Respaldo: si faltan, incluir los que salieron hoy
     if len(candidatos_animales) < 3:
         for num in lista_serie:
             if num in detalles and not detalles[num]["enjaulado"] and num not in [c["num"] for c in candidatos_animales]:
                 candidatos_animales.append({"num": num, "atraso": detalles[num]["atraso"], "freq_20": detalles[num]["freq_20"]})
             if len(candidatos_animales) >= 3: break
         candidatos_animales.sort(key=lambda x: (x["freq_20"], -x["atraso"]), reverse=True)
-
-    return {
-        "conteo": conteo_serie, "atraso": atraso_serie,
-        "serie_top": serie_top, "ranking": candidatos_serie,
-        "animales": candidatos_animales[:3]
-    }
+    return {"conteo": conteo_serie, "atraso": atraso_serie, "serie_top": serie_top, "ranking": candidatos_serie, "animales": candidatos_animales[:3]}
 
 
 def calcular_zona_horaria(df, detalles, salieron_hoy):
@@ -224,31 +385,6 @@ def calcular_zona_horaria(df, detalles, salieron_hoy):
         candidatos.append({"num": num, "score": round(score * 100, 2), "atraso": atr, "freq_12": f12, "jales": jal})
     candidatos.sort(key=lambda x: x["score"], reverse=True)
     return candidatos[:3]
-
-
-def calcular_fijo_del_dia(df, scores, detalles, ritmos, salieron_hoy):
-    total = len(df)
-    candidatos = []
-    for num in ANIMALITOS_DICT.keys():
-        if num not in ritmos or ritmos[num]["promedio"] >= 500: continue
-        if num in salieron_hoy: continue
-        posiciones = ritmos[num]["apariciones"]
-        if not posiciones: continue
-        atraso_actual = total - 1 - posiciones[-1]
-        if atraso_actual >= DESCARTE_ATRASO: continue
-        ritmo = ritmos[num]["promedio"]
-        if ritmo <= 0: continue
-        ratio = atraso_actual / ritmo
-        if ratio >= 1.5: prob = 0.85
-        elif ratio >= 1.0: prob = 0.70
-        elif ratio >= 0.7: prob = 0.55
-        elif ratio >= 0.5: prob = 0.40
-        else: prob = 0.20
-        if ratio > 4: prob *= 0.5
-        if detalles[num]["atraso_hoy"] <= 1: prob *= 0.3
-        candidatos.append({"num": num, "prob": prob, "atraso": atraso_actual, "ritmo": ritmo, "ratio": round(ratio, 2), "score": scores.get(num, 0)})
-    candidatos.sort(key=lambda x: (x["prob"], x["score"]), reverse=True)
-    return candidatos[0] if candidatos else None
 
 
 def motor_casi_adivino(df):
@@ -321,35 +457,26 @@ def motor_casi_adivino(df):
         scores[num] = round(max(score, 0) * 100, 2)
         detalles[num] = {"freq_ventana": fv, "freq_20": f20, "atraso": atr, "atraso_hoy": atr_hoy, "jales_in": jal, "caliente": bonus_caliente > 0, "penal": penal_frio < 0, "enjaulado": atr >= DESCARTE_ATRASO}
     top_ordenado = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    alineaciones = detectar_alineacionines(df, min_repeticiones=2) if False else detectar_alineaciones(df, min_repeticiones=2)
+    alineaciones = detectar_alineaciones(df, min_repeticiones=2)
     ritmos = calcular_ritmo_historico(df)
     return scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior, atrasos, ritmos
 
 
 def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy):
-    """Arma Top 3, Individual y Tripleta EXCLUYENDO los que salieron hoy."""
-    # Primero intentamos solo con los que NO salieron hoy
     top_validos = [(n, s) for n, s in top_ordenado if not detalles[n]["enjaulado"] and n not in salieron_hoy]
-
-    # Si no alcanzan 3, completamos con los que salieron hoy
     if len(top_validos) < 3:
         extra = [(n, s) for n, s in top_ordenado if not detalles[n]["enjaulado"] and n not in [x[0] for x in top_validos]]
         top_validos.extend(extra)
-
     top3 = []
     for num, sc in top_validos[:3]:
         top3.append({"numero": fmt_num(num), "int_num": num, "nombre": ANIMALITOS_DICT[num], "score": sc, "detalle": detalles[num]})
     individual = top3[0] if top3 else None
-
     nums_oficiales = set([t["int_num"] for t in top3])
-    # Candidatos para tripleta alternativa: NO enjaulados y NO salieron hoy
     candidatos = [(n, s) for n, s in top_validos if n not in nums_oficiales and s > 0][:20]
-
     caliente = None
     for n, s in candidatos:
         if detalles[n]["freq_20"] >= 2: caliente = n; break
     if caliente is None and candidatos: caliente = candidatos[0][0]
-
     maduro = None
     for n, s in candidatos:
         if n == caliente: continue
@@ -358,7 +485,6 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy):
     if maduro is None:
         for n, s in candidatos:
             if n != caliente: maduro = n; break
-
     jale = None
     for n, s in candidatos:
         if n in (caliente, maduro): continue
@@ -366,22 +492,19 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy):
     if jale is None:
         for n, s in candidatos:
             if n not in (caliente, maduro): jale = n; break
-
     t_alt = [n for n in [caliente, maduro, jale] if n is not None]
     for n, s in candidatos:
         if len(t_alt) >= 3: break
         if n not in t_alt: t_alt.append(n)
-
     tripleta_alt = []
     for num in t_alt[:3]:
         tripleta_alt.append({"numero": fmt_num(num), "int_num": num, "nombre": ANIMALITOS_DICT[num], "score": scores[num], "detalle": detalles[num]})
-
     return individual, top3, tripleta_alt
 
 
 def main():
     st.title("🐾 Granjita Pro")
-    st.caption("Zona Horaria · Series · Fijo · Tripletas · Filtro 60+ · Sin repetidos hoy")
+    st.caption("Tripleta Pensante · Zona Horaria · Series · Fijo · Filtro 60+")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -399,52 +522,77 @@ def main():
         st.warning("Datos insuficientes.")
         return
 
-    # Detectar quiénes salieron HOY
     fecha_hoy_str, salieron_hoy = calcular_ultimo_dia(df)
-
     individual, top3, tripleta_alt = armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy)
     ultimo = df.iloc[-1]
 
-    st.caption(f"📅 Día actual: {fecha_hoy_str} · Ya salieron hoy: {len(salieron_hoy)} animalitos")
+    # APRENDIZAJES
+    with st.spinner("Calculando cadenas y tríos..."):
+        cadenas = aprender_cadenas(df, max_salto=3)
+        trios_hist = buscar_trios_historicos(df, dias_analisis=60, min_repeticiones=2, ventana=11)
+
+    st.caption(f"📅 Día: {fecha_hoy_str} · Ya salieron hoy: {len(salieron_hoy)} animalitos")
+
+    # ═══════════════════════════════════════════════
+    # 🧠 TRIPLETA PENSANTE (arriba de todo)
+    # ═══════════════════════════════════════════════
+    st.markdown("## 🧠 TRIPLETA PENSANTE")
+    st.caption("Combina atraso + cadenas + tríos históricos + series")
+
+    # Tripleta A
+    resultado_a = calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist, salieron_hoy, excluir=None)
+    if resultado_a[0]:
+        nums_a, exp_a = resultado_a
+        st.markdown("### 🎯 TRIPLETA PENSANTE A")
+        linea_a = " - ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in nums_a])
+        st.success(linea_a)
+        st.markdown("**¿Por qué estos 3?**")
+        for e in exp_a:
+            st.markdown(f"- {e}")
+    else:
+        st.warning("No se pudo armar la Tripleta Pensante A.")
+
+    st.markdown("")
+
+    # Tripleta B (excluyendo los de la A)
+    excluir_b = set(resultado_a[0]) if resultado_a[0] else set()
+    resultado_b = calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist, salieron_hoy, excluir=excluir_b)
+    if resultado_b[0]:
+        nums_b, exp_b = resultado_b
+        st.markdown("### ⚡ TRIPLETA PENSANTE B (alternativa)")
+        linea_b = " - ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in nums_b])
+        st.info(linea_b)
+        st.markdown("**¿Por qué estos 3?**")
+        for e in exp_b:
+            st.markdown(f"- {e}")
+    else:
+        st.warning("No se pudo armar la Tripleta Pensante B.")
+
+    st.markdown("---")
 
     # ZONA HORARIA
     st.markdown("### ⏰ ZONA HORARIA (próxima hora)")
-    st.caption("Analiza los últimos 12 sorteos · Excluye los que ya salieron hoy")
     zona = calcular_zona_horaria(df, detalles, salieron_hoy)
     if zona:
         for i, z in enumerate(zona, 1):
             st.markdown(f"**#{i} - {fmt_num(z['num'])} {ANIMALITOS_DICT[z['num']]}** — {z['score']}%")
             st.caption(f"Atraso: {z['atraso']} · Freq(12): {z['freq_12']} · Jales: {z['jales']}")
     else:
-        st.warning("Sin candidatos válidos (todos ya salieron hoy o están enjaulados).")
+        st.warning("Sin candidatos válidos.")
     st.markdown("---")
 
-    # ANÁLISIS POR SERIE
+    # SERIE
     st.markdown("### 📊 ANÁLISIS POR SERIE (últimos 60 sorteos)")
     series_info = analizar_series(df, detalles, salieron_hoy)
     if series_info:
-        st.markdown("**Conteo por serie:**")
         for nombre, freq in series_info["conteo"].items():
             atr = series_info["atraso"][nombre]
             st.write(f"- {nombre}: **{freq}** apariciones · Atraso: {atr}")
-        st.markdown("**Ranking de series:**")
-        for i, s in enumerate(series_info["ranking"], 1):
-            st.write(f"{i}. **{s['nombre']}** (Freq: {s['freq']} · Atraso: {s['atraso']})")
         st.markdown(f"### 🎯 SERIE RECOMENDADA: {series_info['serie_top']['nombre']}")
         if series_info["animales"]:
-            st.markdown("**Top 3 de esa serie (que NO salieron hoy):**")
             for a in series_info["animales"]:
                 st.write(f"- **{fmt_num(a['num'])} {ANIMALITOS_DICT[a['num']]}** (Atraso: {a['atraso']} · Freq(20): {a['freq_20']})")
     st.markdown("---")
-
-    # FIJO DEL DÍA
-    fijo = calcular_fijo_del_dia(df, scores, detalles, ritmos, salieron_hoy)
-    if fijo:
-        st.markdown("### 🎯 FIJO DEL DÍA")
-        st.markdown(f"## {fmt_num(fijo['num'])} - {ANIMALITOS_DICT[fijo['num']]}")
-        st.markdown(f"**Probabilidad: {round(fijo['prob']*100, 1)}%**")
-        st.caption(f"Atraso: {fijo['atraso']} · Ritmo: cada {fijo['ritmo']} · Ratio: {fijo['ratio']}")
-        st.markdown("---")
 
     if alineaciones:
         st.markdown("### 🔗 Alineación Caliente")
@@ -469,46 +617,6 @@ def main():
             d = detalles.get(num, {})
             st.write(f"{i+1}. **{fmt_num(num)} - {row['nombre']}** (atraso: {d.get('atraso', '?')})")
         st.markdown("---")
-
-    if individual:
-        st.markdown("### 🎯 Animal Individual")
-        d = individual["detalle"]
-        st.markdown(f"## {individual['numero']} - {individual['nombre']}")
-        st.markdown(f"**Score: {individual['score']}%**")
-        st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
-        st.markdown("---")
-
-    st.markdown("### 🏆 Top 3 (sin repetidos de hoy)")
-    if top3:
-        for i, item in enumerate(top3, 1):
-            d = item["detalle"]
-            st.markdown(f"**#{i} - {item['numero']} {item['nombre']}** — {item['score']}%")
-            st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
-    else:
-        st.warning("No hay animalitos válidos.")
-    st.markdown("---")
-
-    st.markdown("### 🎯 Tripleta OFICIAL (11 sorteos)")
-    if len(top3) >= 3:
-        st.success(" - ".join([f"{t['numero']} {t['nombre']}" for t in top3]))
-    else:
-        st.warning("No hay suficientes válidos.")
-    st.markdown("---")
-
-    st.markdown("### ⚡ Tripleta ALTERNATIVA (11 sorteos)")
-    if len(tripleta_alt) >= 3:
-        st.info(" - ".join([f"{t['numero']} {t['nombre']}" for t in tripleta_alt]))
-    else:
-        st.warning("No hay suficientes válidos.")
-    st.markdown("---")
-
-    st.markdown("### 🔗 Jales Aprendidos")
-    ultimo_num = int(ultimo["numero"])
-    jales_ult = jales_aprendidos.get(ultimo_num, Counter())
-    if jales_ult:
-        for jale, c in jales_ult.most_common(3):
-            if detalles.get(jale, {}).get("enjaulado"): continue
-            st.write(f"- Después de **{fmt_num(ultimo_num)} {ultimo['nombre']}** → **{fmt_num(jale)} {ANIMALITOS_DICT[jale]}** ({c} veces)")
 
     with st.expander("📋 Ver últimos 30 sorteos"):
         st.dataframe(df.tail(30)[["fecha", "numero", "nombre"]], use_container_width=True)
