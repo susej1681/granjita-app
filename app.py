@@ -19,7 +19,7 @@ def fecha_hoy_ve():
     return datetime.now(TZ_VE).strftime("%d/%m/%Y")
 
 st.set_page_config(
-    page_title="Mega Granjita - IA",
+    page_title="Granjita Pepe",
     page_icon="🐾",
     layout="centered"
 )
@@ -345,7 +345,6 @@ def motor_casi_adivino(df):
         idxs = df[df["numero"] == num].index.tolist()
         atrasos[num] = total - 1 - idxs[-1] if idxs else total
 
-    # --- FECHA REAL DE HOY Y LÍMITE ESTRICTO DE 12 SORTEOS ---
     fecha_hoy = fecha_hoy_ve()
     df_hoy = df[df["fecha"] == fecha_hoy].tail(12)
     total_hoy = len(df_hoy)
@@ -439,7 +438,7 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy):
 
 
 def main():
-    st.title("🐾 Mega Granjita IA")
+    st.title("🐾 Granjita Pepe")
     st.caption("Ensemble · ML · Fijo · Reventón 4-filtros · Backtesting")
 
     if st.button("🔄 Recargar datos"):
@@ -461,7 +460,6 @@ def main():
     individual, top3, tripleta_alt = armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy)
     ultimo = df.iloc[-1]
 
-    # --- FECHA REAL DE HOY Y CONTEO ESTRICTO ---
     st.caption(f"📅 Día actual: {fecha_hoy_ve()} · Ya salieron hoy: {len(salieron_hoy)} animalitos")
 
     alertas = calcular_alerta_reventon(df, detalles, ritmos, salieron_hoy)
@@ -565,7 +563,6 @@ def main():
     st.caption(f"Fecha: {ultimo['fecha']}")
     st.markdown("---")
 
-    # --- CORRECCIÓN: PRIORIZAR LA FECHA DE HOY PARA LA LISTA DE ABAJO ---
     hoy_str = fecha_hoy_ve()
     if hoy_str in df["fecha"].values:
         fecha_ultima_hoja = hoy_str
@@ -620,7 +617,6 @@ def main():
     with st.expander("📋 Ver últimos 30 sorteos"):
         st.dataframe(df.tail(30)[["fecha", "numero", "nombre"]], use_container_width=True)
 
-    # --- AUTO-REFRESCO CADA 30 SEGUNDOS ---
     if "ultimo_refresco" not in st.session_state:
         st.session_state.ultimo_refresco = time.time()
     if time.time() - st.session_state.ultimo_refresco > 30:
