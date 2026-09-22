@@ -17,6 +17,7 @@ SORTEOS_POR_DIA = 12
 DIAS_VENTANA = 5
 VENTANA_SORTEOS = SORTEOS_POR_DIA * DIAS_VENTANA
 DESCARTE_ATRASO = 60
+PERSISTENCIA_LIMITE = 3  # Sorteos seguidos sin salir como #1
 
 ANIMALITOS_DICT = {
     0: "Delfín", 1: "Carnero", 2: "Toro", 3: "Ciempiés", 4: "Alacrán",
@@ -135,7 +136,7 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
     for num in ANIMALITOS_DICT.keys():
         if num in salieron_hoy or num in excluir: continue
         if detalles[num]["enjaulado"]: continue
-        if num in congelados: continue  # FILTRO 1: NO congelados
+        if num in congelados: continue
         if num not in ritmos or ritmos[num]["promedio"] >= 500: continue
         pos = ritmos[num]["apariciones"]
         if not pos: continue
@@ -151,9 +152,7 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
         if ratio > 4: prob *= 0.5
         if detalles[num]["atraso_hoy"] <= 1: prob *= 0.3
         score_final = prob * 100 + scores.get(num, 0) * 0.3
-        # FILTRO 2: penalización por ayer
-        if num in penal_ayer:
-            score_final *= 0.80
+        if num in penal_ayer: score_final *= 0.80
         candidatos_1.append({"num": num, "score": score_final, "atraso": atraso, "ritmo": ritmo, "ratio": round(ratio, 2), "prob": prob})
 
     candidatos_1.sort(key=lambda x: x["score"], reverse=True)
@@ -164,7 +163,7 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
 
     explicaciones = [f"🎯 **{fmt_num(num1)} {ANIMALITOS_DICT[num1]}**: atraso {cand1['atraso']} vs ritmo {cand1['ritmo']} (ratio {cand1['ratio']})"]
     if num1 in penal_ayer:
-        explicaciones.append(f"⚠️ {fmt_num(num1)} salió 3+ veces ayer → penalizado 20%")
+        explicaciones.append(f"⚠️ salió 3+ veces ayer → penalizado 20%")
 
     cadena_1 = cadenas.get(num1, Counter())
     candidatos_2 = []
@@ -176,8 +175,7 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
         if 3 <= detalles[num2]["atraso"] <= 40:
             score_cad += 15
         score_cad += detalles[num2]["freq_20"] * 5
-        if num2 in penal_ayer:
-            score_cad *= 0.80
+        if num2 in penal_ayer: score_cad *= 0.80
         candidatos_2.append({"num": num2, "score": score_cad, "veces": veces, "atraso": detalles[num2]["atraso"]})
 
     if len(candidatos_2) < 1:
@@ -220,14 +218,13 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
             score_3 += 15
             explicacion_3.append(f"atraso {detalles[num3]['atraso']}")
 
-        score_3 += detalles[num3]["jales_in"] * 6  # PRIORIZAR JALES
+        score_3 += detalles[num3]["jales_in"] * 6
 
         if serie_de(num3) != serie_de(num1) and serie_de(num3) != serie_de(num2):
             score_3 += 8
             explicacion_3.append("otra serie")
 
-        if num3 in penal_ayer:
-            score_3 *= 0.80
+        if num3 in penal_ayer: score_3 *= 0.80
 
         if score_3 > 0:
             candidatos_3.append({"num": num3, "score": score_3, "razon": ", ".join(explicacion_3) if explicacion_3 else "complementario"})
@@ -302,23 +299,21 @@ def calcular_ultimo_dia(df):
 
 
 def calcular_congelados(df, ritmos):
-    """FILTRO 1: Animales donde atraso >= 2 × ritmo."""
     total = len(df)
     congelados = set()
     for num in ANIMALITOS_DICT.keys():
         if num not in ritmos: continue
         ritmo = ritmos[num]["promedio"]
         if ritmo <= 0 or ritmo >= 500: continue
-        posiciones = ritmos[num]["apariciones"]
-        if not posiciones: continue
-        atraso = total - 1 - posiciones[-1]
+        pos = ritmos[num]["apariciones"]
+        if not pos: continue
+        atraso = total - 1 - pos[-1]
         if atraso >= ritmo * 2:
             congelados.add(num)
     return congelados
 
 
 def calcular_penal_ayer(df):
-    """FILTRO 2: Animales que salieron 3+ veces AYER."""
     if df.empty: return set()
     fechas = sorted(df["fecha_dt"].unique())
     if len(fechas) < 2: return set()
@@ -326,6 +321,68 @@ def calcular_penal_ayer(df):
     df_ayer = df[df["fecha_dt"] == fecha_ayer]
     conteo = Counter(df_ayer["numero"].tolist())
     return set([n for n, c in conteo.items() if c >= 3])
+
+
+# ═══════════════════════════════════════════════════
+# NUEVO: MÓDULO ANTI-BLOQUEO DE BANCA
+# ═══════════════════════════════════════════════════
+def calcular_carga_banca(df, scores, detalles, salieron_hoy):
+    """Detecta animales 'bloqueados por la banca' = llevan PERSISTENCIA_LIMITE+ sorteos de hoy
+    sin salir Y siguen siendo top del score."""
+    total = len(df)
+    fecha_hoy = df["fecha"].iloc[-1]
+    df_hoy = df[df["fecha"] == fecha_hoy]
+    total_hoy = len(df_hoy)
+
+    # Ordenar los animalitos del score (top 15) que NO han salido hoy
+    top_candidatos = [(n, s) for n, s in sorted(scores.items(), key=lambda x: x[1], reverse=True) if n not in salieron_hoy][:15]
+
+    cargados = []
+    for num, sc in top_candidatos:
+        # Cuántos sorteos de hoy llevan sin salir
+        sorteos_hoy_sin_salir = total_hoy  # si no ha salido hoy, lleva todos los sorteos de hoy
+        # Su atraso total
+        atraso_total = detalles[num]["atraso"]
+        # Si lleva PERSISTENCIA_LIMITE+ sorteos del día sin salir Y es top → posible carga
+        if total_hoy >= PERSISTENCIA_LIMITE and num not in salieron_hoy:
+            # Solo lo marcamos si es top 3 del score
+            if num in [n for n, _ in top_candidatos[:3]]:
+                # Verificar si estuvo "caliente" recientemente (para saber si es favorito de la calle)
+                if detalles[num]["freq_20"] >= 2 or detalles[num]["jales_in"] >= 2:
+                    cargados.append({
+                        "num": num,
+                        "score_original": sc,
+                        "atraso_hoy": total_hoy,
+                        "freq_20": detalles[num]["freq_20"],
+                        "jales": detalles[num]["jales_in"]
+                    })
+    return cargados
+
+
+def aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca):
+    """Aplica la penalización del 50% a los cargados y eleva el Plan B."""
+    scores_ajustados = scores.copy()
+    detalles_ajustados = {k: v.copy() for k, v in detalles.items()}
+    plan_b = None
+
+    cargados_nums = [c["num"] for c in carga_banca]
+
+    for c in carga_banca:
+        num = c["num"]
+        scores_ajustados[num] = round(scores_ajustados[num] * 0.5, 2)
+        detalles_ajustados[num]["cargado_banca"] = True
+        detalles_ajustados[num]["score_original"] = c["score_original"]
+
+    # Re-ordenar
+    top_nuevo = sorted(scores_ajustados.items(), key=lambda x: x[1], reverse=True)
+
+    # Plan B = el #1 que no esté cargado
+    for num, sc in top_nuevo:
+        if num not in cargados_nums and num not in salieron_hoy and not detalles[num]["enjaulado"]:
+            plan_b = num
+            break
+
+    return scores_ajustados, detalles_ajustados, plan_b
 
 
 def analizar_series(df, detalles, salieron_hoy, congelados):
@@ -367,8 +424,7 @@ def analizar_series(df, detalles, salieron_hoy, congelados):
     return {"conteo": conteo_serie, "atraso": atraso_serie, "serie_top": serie_top, "ranking": candidatos_serie, "animales": candidatos_animales[:3]}
 
 
-def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos):
-    """Zona Horaria con filtros y ALERTA si coincide con Top 3 jales."""
+def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos, carga_banca):
     total = len(df)
     nums = df["numero"].tolist()
     if total < 12:
@@ -377,6 +433,7 @@ def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, ja
     ultimos_12 = nums[-12:]
     ultimo_num = nums[-1]
     top_jales_ultimo = set([n for n, _ in jales_aprendidos.get(ultimo_num, Counter()).most_common(3)])
+    cargados_nums = set([c["num"] for c in carga_banca])
 
     jales_in = Counter()
     ultimos_3 = nums[-3:]
@@ -392,7 +449,7 @@ def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, ja
     for num in ANIMALITOS_DICT.keys():
         if detalles[num]["atraso"] >= DESCARTE_ATRASO: continue
         if num in salieron_hoy: continue
-        if num in congelados: continue  # FILTRO 1
+        if num in congelados: continue
 
         atr = detalles[num]["atraso"]
         f12 = ultimos_12.count(num)
@@ -407,16 +464,22 @@ def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, ja
         if f12 >= 2: score += 0.15
         elif f12 == 1: score += 0.05
 
-        # BONUS 3: si está en Top 3 jales del último resultado
         if num in top_jales_ultimo:
             score += 0.25
             coincidencias.add(num)
 
-        # FILTRO 2: penalización por ayer
-        if num in penal_ayer:
-            score *= 0.80
+        if num in penal_ayer: score *= 0.80
 
-        candidatos.append({"num": num, "score": round(score * 100, 2), "atraso": atr, "freq_12": f12, "jales": jal, "bonus_jal": num in top_jales_ultimo})
+        # ANTI-BLOQUEO: si está cargado, penalizar 50%
+        if num in cargados_nums:
+            score *= 0.50
+
+        candidatos.append({
+            "num": num, "score": round(score * 100, 2),
+            "atraso": atr, "freq_12": f12, "jales": jal,
+            "bonus_jal": num in top_jales_ultimo,
+            "cargado": num in cargados_nums
+        })
 
     candidatos.sort(key=lambda x: x["score"], reverse=True)
     return candidatos[:3], coincidencias
@@ -424,7 +487,7 @@ def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, ja
 
 def motor_casi_adivino(df):
     if df.empty or len(df) < 60:
-        return {}, {}, None, [], [], None, {}, {}, set(), set()
+        return {}
     df_ventana = df.tail(VENTANA_SORTEOS).copy()
     freq_ventana = Counter(df_ventana["numero"].tolist())
     freq_rec20 = Counter(df.tail(20)["numero"].tolist())
@@ -471,8 +534,7 @@ def motor_casi_adivino(df):
     congelados = calcular_congelados(df, ritmos)
     penal_ayer = calcular_penal_ayer(df)
 
-    scores = {}
-    detalles = {}
+    scores = {}; detalles = {}
     for num in ANIMALITOS_DICT.keys():
         fv = freq_ventana.get(num, 0); f20 = freq_rec20.get(num, 0); f30 = freq_rec30.get(num, 0)
         atr = atrasos.get(num, 0); atr_hoy = atraso_hoy.get(num, 999); jal = jales_entrantes.get(num, 0)
@@ -491,24 +553,24 @@ def motor_casi_adivino(df):
         elif atr_hoy == 2: penal_reciente = -0.30
         elif atr_hoy == 3: penal_reciente = -0.20
         elif atr_hoy == 4: penal_reciente = -0.10
-
-        # PESOS AJUSTADOS: más peso a jales
         score = n_fv*0.20 + n_f20*0.20 + n_atr*0.20 + n_jal*0.25 + bonus_caliente + penal_frio + penal_reciente
-
         if fv == 0: score *= 0.4
         if atr >= DESCARTE_ATRASO: score = 0
-        if num in congelados: score *= 0.10  # FILTRO 1: penalización bestial
-        if num in penal_ayer: score *= 0.80   # FILTRO 2: penalización 20%
-
+        if num in congelados: score *= 0.10
+        if num in penal_ayer: score *= 0.80
         scores[num] = round(max(score, 0) * 100, 2)
-        detalles[num] = {"freq_ventana": fv, "freq_20": f20, "atraso": atr, "atraso_hoy": atr_hoy, "jales_in": jal, "caliente": bonus_caliente > 0, "penal": penal_frio < 0, "enjaulado": atr >= DESCARTE_ATRASO, "congelado": num in congelados, "penal_ayer": num in penal_ayer}
-
+        detalles[num] = {"freq_ventana": fv, "freq_20": f20, "atraso": atr, "atraso_hoy": atr_hoy, "jales_in": jal, "caliente": bonus_caliente > 0, "penal": penal_frio < 0, "enjaulado": atr >= DESCARTE_ATRASO, "congelado": num in congelados, "penal_ayer": num in penal_ayer, "cargado_banca": False}
     top_ordenado = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     alineaciones = detectar_alineaciones(df, min_repeticiones=2)
-    return scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior, atrasos, ritmos, congelados, penal_ayer
+    return {
+        "df": df, "scores": scores, "detalles": detalles, "top_ordenado": top_ordenado,
+        "jales_aprendidos": jales_aprendidos, "alineaciones": alineaciones,
+        "fecha_dia_anterior": fecha_dia_anterior, "atrasos": atrasos, "ritmos": ritmos,
+        "salieron_hoy": salieron_hoy, "congelados": congelados, "penal_ayer": penal_ayer
+    }
 
 
-def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy, congelados, penal_ayer):
+def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy, congelados):
     top_validos = [(n, s) for n, s in top_ordenado if not detalles[n]["enjaulado"] and n not in salieron_hoy and n not in congelados]
     if len(top_validos) < 3:
         extra = [(n, s) for n, s in top_ordenado if not detalles[n]["enjaulado"] and n not in [x[0] for x in top_validos] and n not in congelados]
@@ -550,7 +612,7 @@ def armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy, cong
 
 def main():
     st.title("🐾 Granjita Pro")
-    st.caption("Pensante · Cortafuegos · Anti-ayer · Prioridad Jales")
+    st.caption("Pensante · Anti-Bloqueo · Cortafuegos · Prioridad Jales")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -563,72 +625,93 @@ def main():
         st.error("No se pudieron cargar datos.")
         return
 
-    scores, detalles, top_ordenado, jales_aprendidos, alineaciones, fecha_dia_anterior, atrasos, ritmos, congelados, penal_ayer = motor_casi_adivino(df)
-    if not top_ordenado:
+    motor = motor_casi_adivino(df)
+    if not motor:
         st.warning("Datos insuficientes.")
         return
 
-    fecha_hoy_str, salieron_hoy = calcular_ultimo_dia(df)
-    individual, top3, tripleta_alt = armar_resultados(scores, detalles, top_ordenado, atrasos, salieron_hoy, congelados, penal_ayer)
+    scores = motor["scores"]
+    detalles = motor["detalles"]
+    top_ordenado = motor["top_ordenado"]
+    jales_aprendidos = motor["jales_aprendidos"]
+    alineaciones = motor["alineaciones"]
+    fecha_dia_anterior = motor["fecha_dia_anterior"]
+    ritmos = motor["ritmos"]
+    salieron_hoy = motor["salieron_hoy"]
+    congelados = motor["congelados"]
+    penal_ayer = motor["penal_ayer"]
+
+    # CALCULAR CARGA DE BANCA
+    carga_banca = calcular_carga_banca(df, scores, detalles, salieron_hoy)
+    scores_ajustados, detalles_ajustados, plan_b = aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca)
+
+    fecha_hoy_str, _ = calcular_ultimo_dia(df)
+    individual, top3, tripleta_alt = armar_resultados(scores_ajustados, detalles_ajustados, sorted(scores_ajustados.items(), key=lambda x: x[1], reverse=True), motor["atrasos"], salieron_hoy, congelados)
     ultimo = df.iloc[-1]
 
     with st.spinner("Calculando cadenas y tríos..."):
         cadenas = aprender_cadenas(df, max_salto=3)
         trios_hist = buscar_trios_historicos(df, dias_analisis=60, min_repeticiones=2, ventana=11)
 
-    st.caption(f"📅 Día: {fecha_hoy_str} · Salieron hoy: {len(salieron_hoy)} · Congelados: {len(congelados)} · Penalizados ayer: {len(penal_ayer)}")
+    st.caption(f"📅 Día: {fecha_hoy_str} · Hoy: {len(salieron_hoy)} · Congelados: {len(congelados)} · Ayer: {len(penal_ayer)} · Cargados: {len(carga_banca)}")
 
-    # ZONA HORARIA CON ALERTA
-    zona, coincidencias = calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos)
+    # ═══════════════════════════════════════════════
+    # MÓDULO ANTI-BLOQUEO (arriba)
+    # ═══════════════════════════════════════════════
+    if carga_banca:
+        st.markdown("## 🚫 MÓDULO ANTI-BLOQUEO DE BANCA")
+        st.caption("Animales que la banca podría estar 'aguantando' por exceso de apuestas")
+        for c in carga_banca:
+            st.warning(f"**{fmt_num(c['num'])} {ANIMALITOS_DICT[c['num']]}** — Cargado · Score original {c['score_original']}% · Atraso hoy {c['atraso_hoy']} sorteos · Jales {c['jales']}")
+        if plan_b is not None:
+            st.success(f"🔄 **PLAN B RECOMENDADO: {fmt_num(plan_b)} {ANIMALITOS_DICT[plan_b]}**")
+        st.markdown("---")
+
+    # ZONA HORARIA
+    zona, coincidencias = calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos, carga_banca)
     st.markdown("### ⏰ ZONA HORARIA (próxima hora)")
     if zona:
         for i, z in enumerate(zona, 1):
-            alerta = " 🚨 **ALERTA ALTA**" if z["bonus_jal"] else ""
-            st.markdown(f"**#{i} - {fmt_num(z['num'])} {ANIMALITOS_DICT[z['num']]}** — {z['score']}%{alerta}")
-            st.caption(f"Atraso: {z['atraso']} · Freq(12): {z['freq_12']} · Jales: {z['jales']}" + (" · ⭐ coincide con Top 3 jales" if z["bonus_jal"] else ""))
+            alerta = " 🚨 ALERTA" if z["bonus_jal"] else ""
+            cargado_mark = " 🚫 CARGADO" if z["cargado"] else ""
+            st.markdown(f"**#{i} - {fmt_num(z['num'])} {ANIMALITOS_DICT[z['num']]}** — {z['score']}%{alerta}{cargado_mark}")
+            st.caption(f"Atraso: {z['atraso']} · Freq(12): {z['freq_12']} · Jales: {z['jales']}")
     else:
         st.warning("Sin candidatos válidos.")
     st.markdown("---")
 
-    # ALERTA DE COINCIDENCIA
     if coincidencias:
         st.markdown("### 🚨 ALERTA DE ALTA PROBABILIDAD")
-        st.caption("Animales que están en la Zona Horaria Y en el Top 3 de Jales del último resultado")
         for num in coincidencias:
-            st.success(f"**{fmt_num(num)} {ANIMALITOS_DICT[num]}** — Doble confirmación")
+            if num in [c["num"] for c in carga_banca]:
+                st.warning(f"**{fmt_num(num)} {ANIMALITOS_DICT[num]}** — Doble confirmación PERO cargado ⚠️")
+            else:
+                st.success(f"**{fmt_num(num)} {ANIMALITOS_DICT[num]}** — Doble confirmación")
         st.markdown("---")
 
     # TRIPLETA PENSANTE
     st.markdown("## 🧠 TRIPLETA PENSANTE")
-    st.caption("Combina atraso + cadenas + tríos históricos + series (sin congelados)")
-
-    resultado_a = calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist, salieron_hoy, congelados, penal_ayer, excluir=None)
+    resultado_a = calcular_tripleta_pensante(df, detalles_ajustados, scores_ajustados, ritmos, cadenas, trios_hist, salieron_hoy, congelados, penal_ayer, excluir=None)
     if resultado_a[0]:
         nums_a, exp_a = resultado_a
         st.markdown("### 🎯 TRIPLETA PENSANTE A")
         linea_a = " - ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in nums_a])
         st.success(linea_a)
-        st.markdown("**¿Por qué estos 3?**")
         for e in exp_a:
             st.markdown(f"- {e}")
     else:
         st.warning("No se pudo armar la Tripleta Pensante A.")
 
     st.markdown("")
-
     excluir_b = set(resultado_a[0]) if resultado_a[0] else set()
-    resultado_b = calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist, salieron_hoy, congelados, penal_ayer, excluir=excluir_b)
+    resultado_b = calcular_tripleta_pensante(df, detalles_ajustados, scores_ajustados, ritmos, cadenas, trios_hist, salieron_hoy, congelados, penal_ayer, excluir=excluir_b)
     if resultado_b[0]:
         nums_b, exp_b = resultado_b
         st.markdown("### ⚡ TRIPLETA PENSANTE B (alternativa)")
         linea_b = " - ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in nums_b])
         st.info(linea_b)
-        st.markdown("**¿Por qué estos 3?**")
         for e in exp_b:
             st.markdown(f"- {e}")
-    else:
-        st.warning("No se pudo armar la Tripleta Pensante B.")
-
     st.markdown("---")
 
     # SERIE
@@ -660,7 +743,6 @@ def main():
     st.caption(f"Fecha: {ultimo['fecha']}")
     st.markdown("---")
 
-    # ANIMALES DE HOY
     fecha_hoy_real = df["fecha"].iloc[-1]
     df_hoy = df[df["fecha"] == fecha_hoy_real].reset_index(drop=True)
     if not df_hoy.empty:
@@ -671,15 +753,13 @@ def main():
             st.write(f"{i+1}. **{fmt_num(num)} - {row['nombre']}** (atraso: {d.get('atraso', '?')})")
         st.markdown("---")
 
-    # ANIMALES DE AYER
     if fecha_dia_anterior:
         st.markdown(f"### 🔁 Animales del {fecha_dia_anterior}")
         df_dia = df[df["fecha"] == fecha_dia_anterior].reset_index(drop=True)
         for i, row in df_dia.iterrows():
             num = int(row["numero"])
             d = detalles.get(num, {})
-            marca = ""
-            if num in penal_ayer: marca = " ⚠️ (3+ ayer)"
+            marca = " ⚠️ (3+ ayer)" if num in penal_ayer else ""
             st.write(f"{i+1}. **{fmt_num(num)} - {row['nombre']}** (atraso: {d.get('atraso', '?')}){marca}")
         st.markdown("---")
 
@@ -692,11 +772,11 @@ def main():
         st.markdown("---")
 
     st.markdown("### 🏆 Top 3")
-    if top3:
-        for i, item in enumerate(top3, 1):
-            d = item["detalle"]
-            st.markdown(f"**#{i} - {item['numero']} {item['nombre']}** — {item['score']}%")
-            st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
+    for i, item in enumerate(top3, 1):
+        d = item["detalle"]
+        marca_carga = " 🚫 CARGADO" if d.get("cargado_banca") else ""
+        st.markdown(f"**#{i} - {item['numero']} {item['nombre']}** — {item['score']}%{marca_carga}")
+        st.caption(f"Freq(60): {d['freq_ventana']} | Freq(20): {d['freq_20']} | Atraso: {d['atraso']} | Jales: {d['jales_in']}")
     st.markdown("---")
 
     st.markdown("### 🔗 Jales Aprendidos")
@@ -706,11 +786,10 @@ def main():
         for jale, c in jales_ult.most_common(3):
             st.write(f"- Después de **{fmt_num(ultimo_num)} {ultimo['nombre']}** → **{fmt_num(jale)} {ANIMALITOS_DICT[jale]}** ({c} veces)")
 
-    # INFO DE FILTROS
     with st.expander("🚫 Ver animales congelados"):
         if congelados:
             for num in sorted(congelados):
-                st.write(f"- {fmt_num(num)} {ANIMALITOS_DICT[num]} (atraso {detalles[num]['atraso']} vs ritmo {ritmos[num]['promedio']})")
+                st.write(f"- {fmt_num(num)} {ANIMALITOS_DICT[num]}")
         else:
             st.write("Ninguno.")
 
