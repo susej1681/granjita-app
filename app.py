@@ -576,6 +576,18 @@ def main():
     st.caption(f"Fecha: {ultimo['fecha']}")
     st.markdown("---")
 
+    # ANIMALES DE HOY
+    fecha_hoy_real = df["fecha"].iloc[-1]
+    df_hoy = df[df["fecha"] == fecha_hoy_real].reset_index(drop=True)
+    if not df_hoy.empty:
+        st.markdown(f"### 📅 Animales de HOY ({fecha_hoy_real}) — Ya salieron {len(df_hoy)}")
+        for i, row in df_hoy.iterrows():
+            num = int(row["numero"])
+            d = detalles.get(num, {})
+            st.write(f"{i+1}. **{fmt_num(num)} - {row['nombre']}** (atraso: {d.get('atraso', '?')})")
+        st.markdown("---")
+
+    # ANIMALES DE AYER
     if fecha_dia_anterior:
         st.markdown(f"### 🔁 Animales del {fecha_dia_anterior}")
         df_dia = df[df["fecha"] == fecha_dia_anterior].reset_index(drop=True)
