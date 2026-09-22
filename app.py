@@ -31,10 +31,10 @@ ANIMALITOS_DICT = {
 }
 
 SERIES = {
-    "Serie 0 (00-09)": list(range(0, 10)),
+    "Serie 0 (00-09)": list(range(0, 10)) + [100],
     "Serie 10 (10-19)": list(range(10, 20)),
     "Serie 20 (20-29)": list(range(20, 30)),
-    "Serie 30 (30-36)": list(range(30, 37)) + [100]
+    "Serie 30 (30-36)": list(range(30, 37))
 }
 
 
@@ -372,27 +372,81 @@ def aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca):
 def analizar_series(df, detalles, salieron_hoy, congelados):
     if df.empty or len(df) < 10:
         return None
+
     df_ventana = df.tail(VENTANA_SORTEOS)
     nums = df_ventana["numero"].tolist()
     total_v = len(nums)
+
     conteo_serie = {nombre: 0 for nombre in SERIES.keys()}
     for n in nums:
         for nombre, lista in SERIES.items():
             if n in lista:
                 conteo_serie[nombre] += 1
                 break
+
     atraso_serie = {}
     for nombre, lista in SERIES.items():
         posiciones = [i for i, n in enumerate(nums) if n in lista]
         atraso_serie[nombre] = total_v - 1 - posiciones[-1] if posiciones else total_v
+
+    cantidad = {nombre: len(lista) for nombre, lista in SERIES.items()}
+
+    ultimos_3 = nums[-3:] if len(nums) >= 3 else nums
+    recientes_3 = Counter()
+    for n in ultimos_3:
+        for nombre, lista in SERIES.items():
+            if n in lista:
+                recientes_3[nombre] += 1
+                break
+
+    ultimos_6 = nums[-6:] if len(nums) >= 6 else nums
+    recientes_6 = Counter()
+    for n in ultimos_6:
+        for nombre, lista in SERIES.items():
+            if n in lista:
+                recientes_6[nombre] += 1
+                break
+
+    total_animalitos = sum(cantidad.values())
+
     candidatos_serie = []
     for nombre in SERIES.keys():
         freq = conteo_serie[nombre]
         atr = atraso_serie[nombre]
-        score_serie = freq * 0.6 + atr * 0.4
-        candidatos_serie.append({"nombre": nombre, "freq": freq, "atraso": atr, "score": round(score_serie, 1)})
+        cant = cantidad[nombre]
+
+        esperado = total_v * (cant / total_animalitos) if total_v > 0 else 1
+        densidad = freq / esperado if esperado > 0 else 0
+
+        score = densidad * 25 + atr * 2.0
+
+        if atr == 0:
+            score *= 0.20
+        elif atr == 1:
+            score *= 0.40
+        elif atr == 2:
+            score *= 0.65
+        elif atr <= 4:
+            score *= 0.85
+
+        if recientes_3.get(nombre, 0) >= 2:
+            score *= 0.50
+
+        if recientes_6.get(nombre, 0) >= 4:
+            score *= 0.70
+
+        candidatos_serie.append({
+            "nombre": nombre,
+            "freq": freq,
+            "atraso": atr,
+            "densidad": round(densidad, 2),
+            "recientes_3": recientes_3.get(nombre, 0),
+            "score": round(score, 1)
+        })
+
     candidatos_serie.sort(key=lambda x: x["score"], reverse=True)
     serie_top = candidatos_serie[0]
+
     lista_serie = SERIES[serie_top["nombre"]]
     candidatos_animales = []
     for num in lista_serie:
@@ -405,7 +459,14 @@ def analizar_series(df, detalles, salieron_hoy, congelados):
                 candidatos_animales.append({"num": num, "atraso": detalles[num]["atraso"], "freq_20": detalles[num]["freq_20"]})
             if len(candidatos_animales) >= 3: break
         candidatos_animales.sort(key=lambda x: (x["freq_20"], -x["atraso"]), reverse=True)
-    return {"conteo": conteo_serie, "atraso": atraso_serie, "serie_top": serie_top, "ranking": candidatos_serie, "animales": candidatos_animales[:3]}
+
+    return {
+        "conteo": conteo_serie,
+        "atraso": atraso_serie,
+        "serie_top": serie_top,
+        "ranking": candidatos_serie,
+        "animales": candidatos_animales[:3]
+    }
 
 
 def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos, carga_banca):
@@ -696,9 +757,9 @@ def main():
     st.markdown("### 📊 ANÁLISIS POR SERIE (últimos 60 sorteos)")
     series_info = analizar_series(df, detalles, salieron_hoy, congelados)
     if series_info:
-        for nombre, freq in series_info["conteo"].items():
-            atr = series_info["atraso"][nombre]
-            st.write(f"- {nombre}: **{freq}** apariciones · Atraso: {atr}")
+        for r in series_info["ranking"]:
+            extra = f" · 🔥 {r['recientes_3']} en últimos 3" if r.get("recientes_3", 0) >= 2 else ""
+            st.write(f"- {r['nombre']}: **{r['freq']}** apariciones · Atraso: {r['atraso']} · Score: {r['score']}{extra}")
         st.markdown(f"### 🎯 SERIE RECOMENDADA: {series_info['serie_top']['nombre']}")
         if series_info["animales"]:
             for a in series_info["animales"]:
