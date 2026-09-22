@@ -17,7 +17,7 @@ SORTEOS_POR_DIA = 12
 DIAS_VENTANA = 5
 VENTANA_SORTEOS = SORTEOS_POR_DIA * DIAS_VENTANA
 DESCARTE_ATRASO = 60
-PERSISTENCIA_LIMITE = 3  # Sorteos seguidos sin salir como #1
+PERSISTENCIA_LIMITE = 3
 
 ANIMALITOS_DICT = {
     0: "Delfín", 1: "Carnero", 2: "Toro", 3: "Ciempiés", 4: "Alacrán",
@@ -190,9 +190,9 @@ def calcular_tripleta_pensante(df, detalles, scores, ritmos, cadenas, trios_hist
     num2 = candidatos_2[0]["num"]
     veces_2 = candidatos_2[0]["veces"]
     if veces_2 > 0:
-        explicaciones.append(f"🔗 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: después de {ANIMALITOS_DICT[num1]} ha salido {veces_2} veces (atraso {candidatos_2[0]['atraso']})")
+        explicaciones.append(f"🔗 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: después de {ANIMALITOS_DICT[num1]} ha salido {veces_2} veces")
     else:
-        explicaciones.append(f"📊 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: segundo más maduro (atraso {candidatos_2[0]['atraso']})")
+        explicaciones.append(f"📊 **{fmt_num(num2)} {ANIMALITOS_DICT[num2]}**: segundo más maduro")
 
     candidatos_3 = []
     for num3 in ANIMALITOS_DICT.keys():
@@ -323,31 +323,18 @@ def calcular_penal_ayer(df):
     return set([n for n, c in conteo.items() if c >= 3])
 
 
-# ═══════════════════════════════════════════════════
-# NUEVO: MÓDULO ANTI-BLOQUEO DE BANCA
-# ═══════════════════════════════════════════════════
 def calcular_carga_banca(df, scores, detalles, salieron_hoy):
-    """Detecta animales 'bloqueados por la banca' = llevan PERSISTENCIA_LIMITE+ sorteos de hoy
-    sin salir Y siguen siendo top del score."""
     total = len(df)
     fecha_hoy = df["fecha"].iloc[-1]
     df_hoy = df[df["fecha"] == fecha_hoy]
     total_hoy = len(df_hoy)
 
-    # Ordenar los animalitos del score (top 15) que NO han salido hoy
     top_candidatos = [(n, s) for n, s in sorted(scores.items(), key=lambda x: x[1], reverse=True) if n not in salieron_hoy][:15]
 
     cargados = []
     for num, sc in top_candidatos:
-        # Cuántos sorteos de hoy llevan sin salir
-        sorteos_hoy_sin_salir = total_hoy  # si no ha salido hoy, lleva todos los sorteos de hoy
-        # Su atraso total
-        atraso_total = detalles[num]["atraso"]
-        # Si lleva PERSISTENCIA_LIMITE+ sorteos del día sin salir Y es top → posible carga
         if total_hoy >= PERSISTENCIA_LIMITE and num not in salieron_hoy:
-            # Solo lo marcamos si es top 3 del score
             if num in [n for n, _ in top_candidatos[:3]]:
-                # Verificar si estuvo "caliente" recientemente (para saber si es favorito de la calle)
                 if detalles[num]["freq_20"] >= 2 or detalles[num]["jales_in"] >= 2:
                     cargados.append({
                         "num": num,
@@ -360,7 +347,6 @@ def calcular_carga_banca(df, scores, detalles, salieron_hoy):
 
 
 def aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca):
-    """Aplica la penalización del 50% a los cargados y eleva el Plan B."""
     scores_ajustados = scores.copy()
     detalles_ajustados = {k: v.copy() for k, v in detalles.items()}
     plan_b = None
@@ -373,10 +359,8 @@ def aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca):
         detalles_ajustados[num]["cargado_banca"] = True
         detalles_ajustados[num]["score_original"] = c["score_original"]
 
-    # Re-ordenar
     top_nuevo = sorted(scores_ajustados.items(), key=lambda x: x[1], reverse=True)
 
-    # Plan B = el #1 que no esté cargado
     for num, sc in top_nuevo:
         if num not in cargados_nums and num not in salieron_hoy and not detalles[num]["enjaulado"]:
             plan_b = num
@@ -470,7 +454,6 @@ def calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, ja
 
         if num in penal_ayer: score *= 0.80
 
-        # ANTI-BLOQUEO: si está cargado, penalizar 50%
         if num in cargados_nums:
             score *= 0.50
 
@@ -500,6 +483,7 @@ def motor_casi_adivino(df):
     fecha_hoy = df["fecha"].iloc[-1]
     df_hoy = df[df["fecha"] == fecha_hoy]
     total_hoy = len(df_hoy)
+    salieron_hoy = set(df_hoy["numero"].tolist())   # <-- ESTA ERA LA LÍNEA QUE FALTABA
     atraso_hoy = {}
     for num in ANIMALITOS_DICT.keys():
         idxs_hoy = df_hoy[df_hoy["numero"] == num].index.tolist()
@@ -641,12 +625,12 @@ def main():
     congelados = motor["congelados"]
     penal_ayer = motor["penal_ayer"]
 
-    # CALCULAR CARGA DE BANCA
     carga_banca = calcular_carga_banca(df, scores, detalles, salieron_hoy)
     scores_ajustados, detalles_ajustados, plan_b = aplicar_anti_bloqueo(df, scores, detalles, salieron_hoy, carga_banca)
 
     fecha_hoy_str, _ = calcular_ultimo_dia(df)
-    individual, top3, tripleta_alt = armar_resultados(scores_ajustados, detalles_ajustados, sorted(scores_ajustados.items(), key=lambda x: x[1], reverse=True), motor["atrasos"], salieron_hoy, congelados)
+    top_ordenado_ajustado = sorted(scores_ajustados.items(), key=lambda x: x[1], reverse=True)
+    individual, top3, tripleta_alt = armar_resultados(scores_ajustados, detalles_ajustados, top_ordenado_ajustado, motor["atrasos"], salieron_hoy, congelados)
     ultimo = df.iloc[-1]
 
     with st.spinner("Calculando cadenas y tríos..."):
@@ -655,19 +639,15 @@ def main():
 
     st.caption(f"📅 Día: {fecha_hoy_str} · Hoy: {len(salieron_hoy)} · Congelados: {len(congelados)} · Ayer: {len(penal_ayer)} · Cargados: {len(carga_banca)}")
 
-    # ═══════════════════════════════════════════════
-    # MÓDULO ANTI-BLOQUEO (arriba)
-    # ═══════════════════════════════════════════════
     if carga_banca:
         st.markdown("## 🚫 MÓDULO ANTI-BLOQUEO DE BANCA")
-        st.caption("Animales que la banca podría estar 'aguantando' por exceso de apuestas")
+        st.caption("Animales que la banca podría estar 'aguantando'")
         for c in carga_banca:
-            st.warning(f"**{fmt_num(c['num'])} {ANIMALITOS_DICT[c['num']]}** — Cargado · Score original {c['score_original']}% · Atraso hoy {c['atraso_hoy']} sorteos · Jales {c['jales']}")
+            st.warning(f"**{fmt_num(c['num'])} {ANIMALITOS_DICT[c['num']]}** — Cargado · Score original {c['score_original']}% · Atraso hoy {c['atraso_hoy']} · Jales {c['jales']}")
         if plan_b is not None:
-            st.success(f"🔄 **PLAN B RECOMENDADO: {fmt_num(plan_b)} {ANIMALITOS_DICT[plan_b]}**")
+            st.success(f"🔄 **PLAN B: {fmt_num(plan_b)} {ANIMALITOS_DICT[plan_b]}**")
         st.markdown("---")
 
-    # ZONA HORARIA
     zona, coincidencias = calcular_zona_horaria(df, detalles, salieron_hoy, congelados, penal_ayer, jales_aprendidos, carga_banca)
     st.markdown("### ⏰ ZONA HORARIA (próxima hora)")
     if zona:
@@ -689,7 +669,6 @@ def main():
                 st.success(f"**{fmt_num(num)} {ANIMALITOS_DICT[num]}** — Doble confirmación")
         st.markdown("---")
 
-    # TRIPLETA PENSANTE
     st.markdown("## 🧠 TRIPLETA PENSANTE")
     resultado_a = calcular_tripleta_pensante(df, detalles_ajustados, scores_ajustados, ritmos, cadenas, trios_hist, salieron_hoy, congelados, penal_ayer, excluir=None)
     if resultado_a[0]:
@@ -714,7 +693,6 @@ def main():
             st.markdown(f"- {e}")
     st.markdown("---")
 
-    # SERIE
     st.markdown("### 📊 ANÁLISIS POR SERIE (últimos 60 sorteos)")
     series_info = analizar_series(df, detalles, salieron_hoy, congelados)
     if series_info:
