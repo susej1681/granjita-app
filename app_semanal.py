@@ -14,8 +14,8 @@ GOOGLE_SHEET_ID = "1JpJgdyqu3HP4TlNyDocQ7WQjnsDfkUMP4Aj3q97TmHY"
 GOOGLE_SHEET_URL = f"https://docs.google.com/spreadsheets/d/{GOOGLE_SHEET_ID}/export?format=csv"
 
 DIAS_SEMANA = {
-    0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue",
-    4: "Vie", 5: "Sáb", 6: "Dom"
+    0: "LUNES", 1: "MARTES", 2: "MIÉRCOLES", 3: "JUEVES",
+    4: "VIERNES", 5: "SÁBADO", 6: "DOMINGO"
 }
 
 ANIMALITOS_DICT = {
@@ -64,12 +64,18 @@ def cargar_historial():
                     val = str(df_raw.iloc[fd, col]).strip()
                     if not val or val.lower() == "nan" or val.lower() == "hora":
                         continue
+                    hora_val = str(df_raw.iloc[fd, 0]).strip()
                     m = re.search(r'\((\d+)\)', val)
                     if m:
                         ns = m.group(1)
                         num = 100 if ns == "00" else int(ns)
                         nombre = ANIMALITOS_DICT.get(num, re.sub(r'\s*\(\d+\)', '', val).strip())
-                        registros.append({"fecha": fecha, "numero": num, "nombre": nombre})
+                        registros.append({
+                            "fecha": fecha,
+                            "hora": hora_val,
+                            "numero": num,
+                            "nombre": nombre
+                        })
         df = pd.DataFrame(registros)
         if not df.empty:
             df["fecha_dt"] = pd.to_datetime(df["fecha"], format="%d/%m/%Y", errors="coerce")
@@ -77,7 +83,7 @@ def cargar_historial():
         return df
     except Exception as e:
         st.error(f"Error: {e}")
-        return pd.DataFrame(columns=["fecha", "numero", "nombre"])
+        return pd.DataFrame(columns=["fecha", "hora", "numero", "nombre"])
 
 
 def obtener_dias_ventana(hoy):
@@ -85,11 +91,11 @@ def obtener_dias_ventana(hoy):
     if dia_semana == 0:  # LUNES
         sab = hoy - timedelta(days=2)
         dom = hoy - timedelta(days=1)
-        return [sab, dom], "Referencia: Sáb + Dom semana anterior"
+        return [sab, dom], "Referencia: Sábado + Domingo de la semana anterior"
     elif dia_semana == 1:  # MARTES
         dom = hoy - timedelta(days=2)
         lun = hoy - timedelta(days=1)
-        return [dom, lun], "Referencia: Dom anterior + Lunes"
+        return [dom, lun], "Referencia: Domingo anterior + Lunes"
     else:
         inicio = hoy - timedelta(days=dia_semana)
         dias = []
@@ -100,50 +106,64 @@ def obtener_dias_ventana(hoy):
         return dias, f"Semana en curso: {len(dias)} días"
 
 
-def construir_tabla_semanal(df, dias_ventana):
-    """Construye una tabla de animalitos x días."""
-    if not dias_ventana:
-        return {}, []
+def mostrar_dia(df, fecha_obj):
+    """Muestra todos los sorteos de un día con hora."""
+    fecha_str = fecha_obj.strftime("%d/%m/%Y")
+    nombre_dia = DIAS_SEMANA[fecha_obj.weekday()]
     
-    fechas_str = [d.strftime("%d/%m/%Y") for d in dias_ventana]
-    df_ventana = df[df["fecha"].isin(fechas_str)]
+    df_dia = df[df["fecha"] == fecha_str].copy()
+    if df_dia.empty:
+        return False
     
-    if df_ventana.empty:
-        return {}, []
+    st.markdown(f"### 📅 {nombre_dia} {fecha_str}")
     
-    # Tabla: {animalito: {fecha: veces}}
-    tabla = {}
-    for _, row in df_ventana.iterrows():
-        num = row["numero"]
-        fecha = row["fecha"]
-        if num not in tabla:
-            tabla[num] = {}
-        tabla[num][fecha] = tabla[num].get(fecha, 0) + 1
+    # Ordenar por hora
+    df_dia = df_dia.reset_index(drop=True)
+    for i, row in df_dia.iterrows():
+        hora = row.get("hora", "?")
+        num = int(row["numero"])
+        st.write(f"**{hora}** → {fmt_num(num)} {ANIMALITOS_DICT[num]}")
     
-    # Ordenar por total de apariciones
-    ordenados = sorted(tabla.items(), 
-                       key=lambda x: sum(x[1].values()), 
+    st.markdown("")
+    return True
+
+
+def armar_5_tripletas(df_semana, excluidos_hoy):
+    """El sistema arma 5 tripletas con los animalitos activos de la semana."""
+    if df_semana.empty:
+        return []
+    
+    # Contar apariciones y sus días
+    apariciones = {}  # {num: {"total": X, "dias": set(), "ultima_aparicion": idx}}
+    for idx, row in df_semana.iterrows():
+        num = int(row["numero"])
+        if num in excluidos_hoy:
+            continue
+        if num not in apariciones:
+            apariciones[num] = {"total": 0, "dias": set(), "ultimo_idx": 0}
+        apariciones[num]["total"] += 1
+        apariciones[num]["dias"].add(row["fecha"])
+        apariciones[num]["ultimo_idx"] = idx
+    
+    if len(apariciones) < 15:
+        # Completar con los que no salieron (ni hoy)
+        todos = [n for n in ANIMALITOS_DICT.keys() if n not in apariciones and n not in excluidos_hoy]
+        for n in todos:
+            if len(apariciones) >= 15:
+                break
+            apariciones[n] = {"total": 0, "dias": set(), "ultimo_idx": 0}
+    
+    # Ordenar por: total desc, ultimo_idx desc (más reciente primero)
+    ordenados = sorted(apariciones.items(), 
+                       key=lambda x: (x[1]["total"], x[1]["ultimo_idx"]), 
                        reverse=True)
     
-    return tabla, ordenados
-
-
-def armar_5_tripletas(animalitos_activos, excluidos_hoy):
-    """Arma 5 tripletas con los animalitos activos (sin fríos ni calientes, todos iguales)."""
-    # Filtrar los que ya salieron hoy
-    nums = [n for n in animalitos_activos if n not in excluidos_hoy]
-    
-    # Completar si faltan
-    if len(nums) < 15:
-        todos = [n for n in ANIMALITOS_DICT.keys() 
-                 if n not in nums and n not in excluidos_hoy]
-        while len(nums) < 15 and todos:
-            nums.append(todos.pop(0))
+    nums = [n for n, _ in ordenados]
     
     if len(nums) < 15:
         return []
     
-    # Opción D: mezcla variada (usando el orden de actividad)
+    # Armar 5 tripletas combinando variado (sin repetidos dentro de cada una)
     tripletas = [
         [nums[0], nums[5], nums[9]],
         [nums[1], nums[3], nums[10]],
@@ -152,7 +172,6 @@ def armar_5_tripletas(animalitos_activos, excluidos_hoy):
         [nums[8], nums[13], nums[14]],
     ]
     
-    # Sin repetidos dentro de cada tripleta
     resultado = []
     for t in tripletas:
         vistos = set()
@@ -164,12 +183,12 @@ def armar_5_tripletas(animalitos_activos, excluidos_hoy):
         if len(unicos) == 3:
             resultado.append(unicos)
     
-    return resultado
+    return resultado, apariciones
 
 
 def main():
     st.title("📅 Tripletas Semanal")
-    st.caption("Análisis día por día · Sin fríos ni calientes · Todos iguales")
+    st.caption("Vista día por día · Con hora · 5 tripletas diarias")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -184,7 +203,7 @@ def main():
 
     # Fecha automática
     hoy = datetime.now().date()
-    dia_nombre = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"][hoy.weekday()]
+    dia_nombre = DIAS_SEMANA[hoy.weekday()]
     
     st.markdown(f"## 📅 Hoy es **{dia_nombre}**")
     st.caption(f"Fecha: {hoy.strftime('%d/%m/%Y')}")
@@ -195,7 +214,7 @@ def main():
     salieron_hoy = set(df_hoy["numero"].tolist())
     
     if salieron_hoy:
-        st.warning(f"⚠️ **{len(salieron_hoy)} animalitos ya salieron hoy** (quedan excluidos):")
+        st.warning(f"⚠️ **{len(salieron_hoy)} animalitos ya salieron hoy** (excluidos):")
         lista_hoy = ", ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in sorted(salieron_hoy)])
         st.caption(lista_hoy)
 
@@ -203,56 +222,52 @@ def main():
     dias_ventana, descripcion = obtener_dias_ventana(hoy)
     
     st.info(f"📊 **{descripcion}**")
-    if dias_ventana:
-        dias_str = " · ".join([d.strftime("%d/%m") for d in dias_ventana])
-        st.caption(f"Días incluidos: {dias_str}")
 
     st.markdown("---")
 
-    # Construir tabla semanal
-    tabla, ordenados = construir_tabla_semanal(df, dias_ventana)
+    # ═══════════════════════════════════════
+    # VISTA DÍA POR DÍA
+    # ═══════════════════════════════════════
+    st.markdown("## 📅 ANÁLISIS DÍA POR DÍA")
+
+    dias_mostrados = 0
+    for dia in dias_ventana:
+        if mostrar_dia(df, dia):
+            dias_mostrados += 1
     
-    if not tabla:
+    # Mostrar HOY también (los que han salido)
+    if not df_hoy.empty:
+        st.markdown(f"### 📅 {dia_nombre} {hoy_str} (HOY — parcial)")
+        for i, row in df_hoy.iterrows():
+            hora = row.get("hora", "?")
+            num = int(row["numero"])
+            st.write(f"**{hora}** → {fmt_num(num)} {ANIMALITOS_DICT[num]}")
+        st.markdown("")
+
+    if dias_mostrados == 0:
         st.warning("⚠️ No hay datos en la ventana actual.")
         return
 
-    # Mostrar tabla día por día
-    st.markdown("## 📊 ANÁLISIS DÍA POR DÍA")
-    st.caption("Ve qué animalito salió cada día de la semana")
-    
-    # Headers
-    headers = "| Animalito | " + " | ".join([DIAS_SEMANA[d.weekday()] for d in dias_ventana]) + " | Total |"
-    st.markdown("**" + headers + "**")
-    st.markdown("|" + "---|" * (len(dias_ventana) + 2))
-    
-    for num, dias_dict in ordenados:
-        total = sum(dias_dict.values())
-        if num in salieron_hoy:
-            continue  # No mostrar los que salieron hoy
-        fila = f"| {fmt_num(num)} {ANIMALITOS_DICT[num]} |"
-        for d in dias_ventana:
-            fecha_str = d.strftime("%d/%m/%Y")
-            veces = dias_dict.get(fecha_str, 0)
-            if veces > 0:
-                fila += f" ✅{veces if veces > 1 else ''} |"
-            else:
-                fila += " ❌ |"
-        fila += f" {total} |"
-        st.markdown(fila)
-
     st.markdown("---")
 
-    # Armar las 5 tripletas
+    # ═══════════════════════════════════════
+    # TRIPLETAS
+    # ═══════════════════════════════════════
     st.markdown("## 🎯 5 TRIPLETAS PARA HOY")
-    st.caption("Combinando animalitos activos de la semana (sin los que ya salieron hoy)")
+
+    # Combinar toda la semana
+    fechas_str = [d.strftime("%d/%m/%Y") for d in dias_ventana]
+    df_semana = df[df["fecha"].isin(fechas_str)]
+
+    resultado = armar_5_tripletas(df_semana, salieron_hoy)
     
-    animalitos_activos = [n for n, _ in ordenados]
-    tripletas = armar_5_tripletas(animalitos_activos, salieron_hoy)
-    
-    if not tripletas:
+    if not resultado or not resultado[0]:
         st.warning("No hay suficientes animalitos para armar las tripletas.")
         return
     
+    tripletas, apariciones = resultado
+
+    # Mostrar las 5 tripletas
     for i, trip in enumerate(tripletas, 1):
         nombres = " + ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in trip])
         if i <= 2:
@@ -263,7 +278,15 @@ def main():
             st.warning(f"**Tripleta #{i}:** {nombres}")
 
     st.markdown("---")
-    st.caption("💡 Análisis día por día · Sin fríos ni calientes · Excluye los que ya salieron hoy")
+
+    # Resumen de animalitos más activos
+    with st.expander("📊 Ver animalitos más activos de la semana"):
+        ordenados = sorted(apariciones.items(), key=lambda x: x[1]["total"], reverse=True)
+        for num, info in ordenados[:20]:
+            if info["total"] > 0:
+                st.write(f"**{fmt_num(num)} {ANIMALITOS_DICT[num]}** — {info['total']} veces")
+
+    st.caption("💡 Vista día por día con hora · Excluye los que ya salieron hoy")
 
 
 if __name__ == "__main__":
