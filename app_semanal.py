@@ -81,23 +81,17 @@ def cargar_historial():
 
 
 def obtener_dias_ventana(hoy):
-    """Devuelve los días de la semana que entran en la ventana según qué día es hoy."""
-    dia_semana = hoy.weekday()  # 0=lunes, 6=domingo
+    dia_semana = hoy.weekday()
     
     if dia_semana == 0:  # LUNES
-        # Referencia: sábado y domingo de la semana pasada
         sab = hoy - timedelta(days=2)
         dom = hoy - timedelta(days=1)
         return [sab, dom], "Referencia: Sáb + Dom semana anterior"
-    
     elif dia_semana == 1:  # MARTES
-        # Referencia: domingo pasado + lunes
         dom = hoy - timedelta(days=2)
         lun = hoy - timedelta(days=1)
         return [dom, lun], "Referencia: Dom anterior + Lunes"
-    
-    else:  # MIÉRCOLES a DOMINGO
-        # Todos los días desde el lunes de esta semana hasta ayer
+    else:
         inicio_semana = hoy - timedelta(days=dia_semana)
         dias = []
         d = inicio_semana
@@ -108,7 +102,6 @@ def obtener_dias_ventana(hoy):
 
 
 def analizar_semana(df, dias_ventana):
-    """Analiza los animalitos que salieron en la ventana."""
     if not dias_ventana:
         return Counter(), []
     
@@ -124,30 +117,28 @@ def analizar_semana(df, dias_ventana):
     return conteo, ordenados
 
 
-def armar_5_tripletas(ordenados):
-    """Arma 5 tripletas con la Opción D (mezcla variada)."""
-    if len(ordenados) < 15:
-        # Si hay menos de 15, usar todos los disponibles
-        nums = [n for n, _ in ordenados]
-        if len(nums) < 3:
-            return []
-        # Rellenar con fríos si es necesario
-        todos_frios = [n for n in ANIMALITOS_DICT.keys() if n not in nums]
+def armar_5_tripletas(ordenados, excluidos_hoy):
+    """Arma 5 tripletas excluyendo los que ya salieron hoy."""
+    # Filtrar los que ya salieron hoy
+    nums = [n for n, _ in ordenados if n not in excluidos_hoy]
+    
+    if len(nums) < 15:
+        # Completar con animalitos que no salieron en la semana (ni hoy)
+        todos_frios = [n for n in ANIMALITOS_DICT.keys() 
+                       if n not in nums and n not in excluidos_hoy]
         while len(nums) < 15 and todos_frios:
             nums.append(todos_frios.pop(0))
-    else:
-        nums = [n for n, _ in ordenados[:15]]
     
     if len(nums) < 15:
         return []
     
     # Opción D: mezcla variada
     tripletas = [
-        [nums[0], nums[5], nums[9]],    # T1: 1 top + 2 medios
-        [nums[0], nums[1], nums[10]],   # T2: 2 top + 1 medio
-        [nums[2], nums[3], nums[6]],    # T3: 3 medios
-        [nums[7], nums[11], nums[14]],  # T4: 1 frío + 2 medios
-        [nums[12], nums[13], nums[4]],  # T5: 3 fríos (con 1 medio)
+        [nums[0], nums[5], nums[9]],
+        [nums[0], nums[1], nums[10]],
+        [nums[2], nums[3], nums[6]],
+        [nums[7], nums[11], nums[14]],
+        [nums[12], nums[13], nums[4]],
     ]
     
     # Asegurar que no hay repetidos dentro de cada tripleta
@@ -167,7 +158,7 @@ def armar_5_tripletas(ordenados):
 
 def main():
     st.title("📅 Tripletas Semanal")
-    st.caption("Ventana creciente de lunes a domingo · 5 tripletas diarias")
+    st.caption("Ventana creciente · Excluye los que ya salieron hoy")
 
     if st.button("🔄 Recargar datos"):
         st.cache_data.clear()
@@ -187,6 +178,16 @@ def main():
     st.markdown(f"## 📅 Hoy es **{dia_nombre}**")
     st.caption(f"Fecha: {hoy.strftime('%d/%m/%Y')}")
 
+    # Detectar qué salió HOY
+    hoy_str = hoy.strftime("%d/%m/%Y")
+    df_hoy = df[df["fecha"] == hoy_str]
+    salieron_hoy = set(df_hoy["numero"].tolist())
+    
+    if salieron_hoy:
+        st.warning(f"⚠️ **{len(salieron_hoy)} animalitos ya salieron hoy** (quedan excluidos):")
+        lista_hoy = ", ".join([f"{fmt_num(n)} {ANIMALITOS_DICT[n]}" for n in sorted(salieron_hoy)])
+        st.caption(lista_hoy)
+
     # Obtener ventana de días
     dias_ventana, descripcion = obtener_dias_ventana(hoy)
     
@@ -201,23 +202,24 @@ def main():
     conteo, ordenados = analizar_semana(df, dias_ventana)
     
     if not conteo:
-        st.warning("⚠️ No hay datos en la ventana actual. Necesitas al menos 1 día de resultados.")
-        st.info("💡 El lunes usa sáb+dom de la semana pasada. El martes usa dom+lun. Desde miércoles usa la semana en curso.")
+        st.warning("⚠️ No hay datos en la ventana actual.")
         return
 
-    # Mostrar lista completa
+    # Mostrar lista completa (con marca de los que salieron hoy)
     st.markdown("## 📊 Animalitos de la ventana")
-    st.caption(f"Total: {len(ordenados)} animalitos salieron")
+    st.caption(f"Total: {len(ordenados)} animalitos salieron en la ventana")
     
     for i, (num, veces) in enumerate(ordenados, 1):
-        st.write(f"{i}. **{fmt_num(num)} {ANIMALITOS_DICT[num]}** — {veces} veces")
+        marca = " ❌ (ya salió hoy)" if num in salieron_hoy else ""
+        st.write(f"{i}. **{fmt_num(num)} {ANIMALITOS_DICT[num]}** — {veces} veces{marca}")
 
     st.markdown("---")
 
     # Armar las 5 tripletas
     st.markdown("## 🎯 5 TRIPLETAS PARA HOY")
+    st.caption("Sin los que ya salieron hoy")
     
-    tripletas = armar_5_tripletas(ordenados)
+    tripletas = armar_5_tripletas(ordenados, salieron_hoy)
     
     if not tripletas:
         st.warning("No hay suficientes animalitos para armar las tripletas.")
@@ -233,7 +235,7 @@ def main():
             st.warning(f"**Tripleta #{i}:** {nombres}")
 
     st.markdown("---")
-    st.caption("💡 Las tripletas se arman con los animalitos que salieron en la ventana · Repetidos entre tripletas permitidos · Sin repetidos dentro de la misma tripleta")
+    st.caption("💡 Excluye los que ya salieron hoy · Sin repetidos dentro de la misma tripleta · Pueden repetir entre tripletas")
 
 
 if __name__ == "__main__":
